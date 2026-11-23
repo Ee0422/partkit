@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 import urllib.parse
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from .suppliers import Http, Offer, SupplierError, default_http
 
@@ -48,6 +48,54 @@ class ValueQuery:
         if self.dielectric:
             bits.append(self.dielectric)
         return " ".join(bits)
+
+
+# The filters the search tab shows for each kind, and the choices in them.
+FILTER_FIELDS = {"R": ("package", "tolerance", "power"), "C": ("package", "voltage", "dielectric", "tolerance")}
+SIZES = ("0201", "0402", "0603", "0805", "1206", "1210")
+VOLTAGES = (6.3, 10, 16, 25, 50, 100)
+DIELECTRICS = ("C0G", "X5R", "X7R")
+TOLERANCES = {"R": (0.001, 0.01, 0.05), "C": (0.05, 0.1, 0.2)}
+POWERS = (0.0625, 0.1, 0.125, 0.25, 0.5)
+
+
+def filters_of(q: ValueQuery) -> dict:
+    """The filter fields a query sets (only the ones that are set)."""
+    return {f: getattr(q, f) for f in FILTER_FIELDS[q.kind] if getattr(q, f) not in (None, "")}
+
+
+def with_filters(q: ValueQuery, filters: dict, only_unset: bool = False) -> ValueQuery:
+    """The query with these filter fields; only_unset keeps what was typed (for 'my usual')."""
+    changes = {}
+    for f in FILTER_FIELDS[q.kind]:
+        if f not in filters:
+            continue
+        if only_unset and getattr(q, f) not in (None, ""):
+            continue
+        changes[f] = filters[f] if filters[f] is not None else ("" if f in ("package", "dielectric") else None)
+    return replace(q, **changes)
+
+
+def encode_filters(filters: dict) -> str:
+    """'package=0603;voltage=50' - how 'my usual' is kept in the settings file."""
+    return ";".join(f"{k}={v}" for k, v in filters.items() if v not in (None, ""))
+
+
+def decode_filters(text: str) -> dict:
+    out: dict = {}
+    for bit in (text or "").split(";"):
+        k, _, v = bit.partition("=")
+        k, v = k.strip(), v.strip()
+        if not v:
+            continue
+        if k in ("package", "dielectric"):
+            out[k] = v
+        elif k in ("tolerance", "voltage", "power"):
+            try:
+                out[k] = float(v)
+            except ValueError:
+                pass
+    return out
 
 
 def format_ohms(v: float) -> str:

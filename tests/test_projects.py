@@ -187,3 +187,15 @@ def test_undo_delete_cancels_the_removal(lib):
     assert len(lib.pending_removals()) == 1
     lib.undo("10K")
     assert lib.pending_removals() == [] and lib.get("10K") is not None
+
+
+def test_folder_with_one_altium_project_uses_that_project(lib, tmp_path):
+    (tmp_path / "Testing_Script.PrjPcb").write_text(
+        "[Document1]\nDocumentPath=Testing_Script.SchLib\n[Document2]\nDocumentPath=Testing_Script.PcbLib\n"
+        "[Document3]\nDocumentPath=..\\Other\\Resistors.PcbLib\n", encoding="utf-8")
+    schs, pcbs = projects.library_choices(tmp_path)
+    assert len(schs) == 1 and len(pcbs) == 2
+    sch, pcb = projects.planned_libraries(tmp_path, "X", pcblib=pcbs[0])
+    assert sch.endswith("Testing_Script.SchLib") and pcb.endswith("Testing_Script.PcbLib")
+    proj = projects.create(lib, "Board", folder=str(tmp_path), pcblib=pcbs[0])
+    assert proj.prjpcb.endswith("Testing_Script.PrjPcb")

@@ -298,11 +298,13 @@ def test_new_project_dialog_picks_existing_library_folder(win, monkeypatch, tmp_
     (tmp_path / "STM32.PcbLib").write_bytes(b"x")
     (tmp_path / "Old.PcbLib").write_bytes(b"x")
     real = gui.NewProjectDialog
+    shown = []
 
     def fake_dialog(*a):
         d = real(*a)
         d.name.setText("Board")
-        d.lib_folder.setText(str(tmp_path))
+        assert d.picker.set_path(str(tmp_path))
+        shown.append(d.picker.result.text())
         d.exec = lambda: gui.QDialog.Accepted
         return d
 
@@ -314,3 +316,38 @@ def test_new_project_dialog_picks_existing_library_folder(win, monkeypatch, tmp_
     proj = projects.get(win.lib, "Board")
     assert proj.own_library and proj.schlib.endswith("STM32.SchLib") and proj.pcblib.endswith("STM32.PcbLib")
     assert "STM32.SchLib + STM32.PcbLib" in win.proj_folder.text()
+    assert "STM32.SchLib" in shown[0] and "STM32.PcbLib" in shown[0] and "(new" not in shown[0]
+
+
+def test_value_filters_fit_the_part_and_remember_my_usual(win, monkeypatch):
+    from partkit import search
+    from partkit.search import SearchResult
+
+    seen = []
+
+    def fake(text, settings, http=None, query=None):
+        seen.append(query)
+        return SearchResult(mpn=text, query=query)
+
+    monkeypatch.setattr(search, "find_any", fake)
+    import threading
+
+    monkeypatch.setattr(threading, "Thread", lambda target, daemon: type("T", (), {"start": staticmethod(target)})())
+    win.search_box.setText("100nF 0603 50V X7R")
+    win.run_search()
+    assert seen[-1].voltage == 50 and not win.value_filter_box.isHidden()
+    assert win.f_diel.currentText() == "X7R" and win.f_power.isHidden() and not win.f_volt.isHidden()
+    win.remember_usual()
+    assert "voltage=50" in Library(win.lib.root).settings.usual_capacitor
+    # next time only the value is typed: my usual is filled in
+    win.search_box.setText("1uF")
+    win.run_search()
+    assert seen[-1].package == "0603" and seen[-1].dielectric == "X7R" and seen[-1].voltage == 50
+    # a filter changed for one search searches again
+    win.f_volt.setCurrentIndex(win.f_volt.findData(16.0))
+    win._value_filter_changed()
+    assert seen[-1].voltage == 16 and seen[-1].package == "0603"
+    # part numbers hide the value filters
+    win.search_box.setText("LM358DR")
+    win.run_search()
+    assert win.value_filter_box.isHidden()

@@ -31,8 +31,12 @@ project uses.
   apart: voltage, dielectric, tolerance, height and so on.
 - **Finds JLCPCB parts by value.** Type `1k 0603 1%` or `100nF 0603 50V X7R` and
   PartKit lists the matching JLCPCB parts, Basic first, one row per part with
-  value, size, tolerance, rating, dielectric, stock and price. Show Basic only
-  or Extended only, in stock only, one supplier, or narrow by typing. No API key is needed.
+  value, size, tolerance, rating, dielectric, stock and price. Filters that fit
+  the part (size, voltage, dielectric and tolerance for capacitors; size,
+  tolerance and power for resistors) search again when you change them, and
+  **Remember as my usual** fills them in next time you type only a value such as
+  `100nF`. Show Basic only or Extended only, in stock only, one supplier, or
+  narrow by typing. No API key is needed.
 - **Reuses parts you've checked.** Check one 0603 resistor in Altium, then
   **New value from this part** makes 4.7k, 22k and so on with the same symbol,
   footprint and 3D model: type the value, pick a JLCPCB part, no download.
@@ -41,9 +45,9 @@ project uses.
 - **Projects.** Each board gets a project with its own parts list, started empty,
   from templates (groups such as "USB-C power input") or as a copy of another
   project. Add more parts any time with *Add to project*. Choose your board's
-  Altium project (.PrjPcb) and the project gets its own library: PartKit adds to
-  the .SchLib and .PcbLib already in it, whatever they're called, or makes new
-  ones next to it. *Send to Altium* writes only the parts the project's library
+  Altium project (.PrjPcb) or its folder and the project gets its own library:
+  PartKit shows the exact .SchLib and .PcbLib before you press OK (asking which
+  one if there are several), adds to the ones already there, or makes new ones. *Send to Altium* writes only the parts the project's library
   doesn't have yet, and the Projects tab tells you when a part changed since. The starting parts list saves as a CSV for Excel; the real BOM comes
   from Altium once the schematic is done.
 - **Favourites.** Star the parts you use all the time; they're listed first.
@@ -104,8 +108,8 @@ partkit --help       # the command line
    For New value and New part, pick the supplier part yourself;
    PartKit warns if its package doesn't match the footprint.
 7. **Projects.** On *Projects*, make a project, add parts from *My parts* with
-   **Add to project**, and (optionally) choose your board's Altium project
-   (.PrjPcb) so its parts go into that project's own library.
+   **Add to project**, and (optionally) choose your board's Altium project or
+   folder so its parts also go into that board's own library.
 
 Use **Settings > Test mode** (or `partkit --test`) to try things on a
 throwaway library.

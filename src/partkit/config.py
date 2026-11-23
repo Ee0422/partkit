@@ -60,6 +60,18 @@ class Settings:
     digikey_site: str = "US"
     digikey_currency: str = "USD"
     farnell_store: str = "uk.farnell.com"
+    # "My usual" search filters, e.g. "package=0603;voltage=50;dielectric=X7R"
+    usual_resistor: str = ""
+    usual_capacitor: str = ""
+
+    def usual(self, kind: str) -> str:
+        return self.usual_resistor if kind == "R" else self.usual_capacitor
+
+    def set_usual(self, kind: str, text: str) -> None:
+        if kind == "R":
+            self.usual_resistor = text
+        else:
+            self.usual_capacitor = text
 
     def target_libs(self, category: str) -> tuple[str, str]:
         t = self.targets.get(category, {})

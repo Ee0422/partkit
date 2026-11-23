@@ -90,11 +90,14 @@ def find(mpn: str, settings: Settings, http: Http = default_http, clients: dict 
     return res
 
 
-def find_any(text: str, settings: Settings, http: Http = default_http) -> SearchResult:
-    """One box for everything: a value such as "1k 0603 1%", or a part number."""
+def find_any(text: str, settings: Settings, http: Http = default_http, query=None) -> SearchResult:
+    """One box for everything: a value such as "1k 0603 1%", or a part number.
+
+    query: a ValueQuery to use instead of reading the text (the search tab's filters).
+    """
     from . import valuesearch
 
-    q = valuesearch.parse(text)
+    q = query or valuesearch.parse(text)
     if q is None:
         return find(text, settings, http)
     res = SearchResult(mpn=text.strip(), query=q)

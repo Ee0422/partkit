@@ -191,9 +191,39 @@ def use_prjpcb(proj: Project, prjpcb: str | Path, schlib: str = "", pcblib: str 
     return proj
 
 
-def use_file(proj: Project, path: str | Path, schlib: str = "", pcblib: str = "") -> Project:
-    """Point a project at what the person picked: an Altium project, a library file, or a folder."""
+def _only_prjpcb(folder: Path) -> Path | None:
+    found = sorted(folder.glob("*.PrjPcb")) if folder.is_dir() else []
+    return found[0] if len(found) == 1 else None
+
+
+def library_choices(path: str | Path) -> tuple[list[str], list[str]]:
+    """The .SchLib and .PcbLib files (full paths) to choose from for what was picked:
+    an Altium project, or a folder (its one Altium project if it has exactly one, else the
+    libraries lying in it). Empty lists mean PartKit makes new ones."""
     p = Path(path)
+    if p.is_dir() and _only_prjpcb(p):
+        p = _only_prjpcb(p)
+    if p.suffix.lower() == ".prjpcb":
+        return libraries_in_prjpcb(p)
+    schs, pcbs = libraries_in(p)
+    return [str(p / f) for f in schs], [str(p / f) for f in pcbs]
+
+
+def planned_libraries(path: str | Path, name: str, schlib: str = "", pcblib: str = "") -> tuple[str, str]:
+    """Where the parts would go, without changing anything (to show before you press OK)."""
+    proj = Project(name or "project")
+    use_file(proj, path, schlib, pcblib)
+    return proj.schlib, proj.pcblib
+
+
+def use_file(proj: Project, path: str | Path, schlib: str = "", pcblib: str = "") -> Project:
+    """Point a project at what the person picked: an Altium project, a library file, or a folder.
+
+    A folder holding exactly one Altium project counts as that project.
+    """
+    p = Path(path)
+    if p.is_dir() and _only_prjpcb(p):
+        p = _only_prjpcb(p)
     if p.suffix.lower() == ".prjpcb":
         return use_prjpcb(proj, p, schlib, pcblib)
     if p.suffix.lower() == ".schlib":

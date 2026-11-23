@@ -291,6 +291,117 @@ class ReuseDialog(QDialog):
         self.accept()
 
 
+class LibraryPicker(QWidget):
+    """Choose where a project's own library is: an Altium project (.PrjPcb) or a folder.
+
+    Shows the exact .SchLib and .PcbLib the parts will go into before you press OK,
+    and asks which one when there are several.
+    """
+
+    def __init__(self, parent=None, name_box: QLineEdit | None = None, start: str = ""):
+        super().__init__(parent)
+        self.name_box = name_box
+        self.path, self.files = "", ("", "")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        row = QHBoxLayout()
+        self.line = QLineEdit(start)
+        self.line.setReadOnly(True)
+        self.line.setPlaceholderText("Empty: use my main library")
+        proj_btn = QPushButton("Altium project…")
+        proj_btn.setToolTip("Your board's .PrjPcb: PartKit uses the .SchLib/.PcbLib already in it")
+        proj_btn.clicked.connect(self._pick_project)
+        folder_btn = QPushButton("Folder…")
+        folder_btn.setToolTip("A folder: its Altium project, or the .SchLib/.PcbLib in it.\n"
+                              "If there are none, PartKit makes new ones there.")
+        folder_btn.clicked.connect(self._pick_folder)
+        clear = QPushButton("Clear")
+        clear.clicked.connect(self.clear)
+        for wdg in (self.line, proj_btn, folder_btn, clear):
+            row.addWidget(wdg)
+        lay.addLayout(row)
+        self.result = QLabel("")
+        self.result.setWordWrap(True)
+        lay.addWidget(self.result)
+        if name_box is not None:
+            name_box.textChanged.connect(self._show)
+
+    def _pick_project(self):
+        f, _ = QFileDialog.getOpenFileName(self, "Your board's Altium project", self.path,
+                                           "Altium project (*.PrjPcb)")
+        if f:
+            self.set_path(f)
+
+    def _pick_folder(self):
+        d = QFileDialog.getExistingDirectory(self, "Folder of your board's library", self.path)
+        if d:
+            self.set_path(d)
+
+    def clear(self):
+        self.path, self.files = "", ("", "")
+        self.line.clear()
+        self._show()
+
+    def set_path(self, path: str) -> bool:
+        """Use this project or folder, asking which library when there are several. False if cancelled."""
+        from PySide6.QtWidgets import QInputDialog
+
+        from . import projects
+
+        schs, pcbs = projects.library_choices(path)
+        chosen = []
+        for kind, found in (("SchLib", schs), ("PcbLib", pcbs)):
+            if len(found) <= 1:
+                chosen.append(found[0] if found else "")
+                continue
+            names = [Path(f).name if [Path(x).name for x in found].count(Path(f).name) == 1 else f for f in found]
+            name, ok = QInputDialog.getItem(self, "PartKit", f"There are {len(found)} .{kind} files. "
+                                            "Which one is this board's?", names, 0, False)
+            if not ok:
+                return False
+            chosen.append(found[names.index(name)])
+        self.path, self.files = str(path), tuple(chosen)
+        self.line.setText(str(path))
+        if self.name_box is not None and not self.name_box.text().strip():
+            self.name_box.setText(Path(path).stem if Path(path).suffix else Path(path).name)
+        self._show()
+        return True
+
+    def _show(self, *_):
+        from . import projects
+
+        if not self.path:
+            self.result.setText("Parts go into your main library only.")
+            return
+        name = self.name_box.text().strip() if self.name_box is not None else ""
+        try:
+            sch, pcb = projects.planned_libraries(self.path, name, *self.files)
+        except ValueError as e:
+            self.result.setText(str(e))
+            return
+        lines = [f"{Path(x).name}{'' if Path(x).exists() else ' (new, PartKit makes it)'}" for x in (sch, pcb)]
+        self.result.setText("Parts also go into:\n  " + "\n  ".join(lines) + f"\nin {Path(sch).parent}")
+        self.result.setToolTip(f"{sch}\n{pcb}")
+
+
+class LibraryDialog(QDialog):
+    """Change where an existing project's own library is."""
+
+    def __init__(self, parent, name: str, start: str = ""):
+        super().__init__(parent)
+        self.setWindowTitle(f"Library for '{name}'")
+        lay = QVBoxLayout(self)
+        box = QLineEdit(name)
+        self.picker = LibraryPicker(self, box, start)
+        lay.addWidget(QLabel("Choose your board's Altium project, or a folder:"))
+        lay.addWidget(self.picker)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        lay.addWidget(buttons)
+        self.picker._show()
+
+
 class NewProjectDialog(QDialog):
     def __init__(self, parent, templates: list[str], projects: list[str]):
         super().__init__(parent)
@@ -310,35 +421,15 @@ class NewProjectDialog(QDialog):
         self.copy = QComboBox()
         self.copy.addItems(projects)
         form.addRow("Copy of", self.copy)
-        row = QHBoxLayout()
-        self.lib_folder = QLineEdit()
-        self.lib_folder.setReadOnly(True)
-        self.lib_folder.setPlaceholderText("Empty: use my main library")
-        self.lib_folder.setToolTip("Choose your board's Altium project (.PrjPcb).\n"
-                                   "PartKit adds parts to the .SchLib/.PcbLib already in it,\n"
-                                   "or makes new ones next to it if it has none.")
-        choose = QPushButton("Choose…")
-        choose.clicked.connect(self._choose_folder)
-        clear = QPushButton("Clear")
-        clear.clicked.connect(self.lib_folder.clear)
-        for wdg in (self.lib_folder, choose, clear):
-            row.addWidget(wdg)
-        form.addRow("Altium project (optional)", row)
+        self.picker = LibraryPicker(self, self.name)
+        self.picker._show()
+        form.addRow("Own library (optional)", self.picker)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         form.addRow(buttons)
         self.start.currentTextChanged.connect(self._mode)
         self._mode()
-
-    def _choose_folder(self):
-        f, _ = QFileDialog.getOpenFileName(self, "Your board's Altium project",
-                                           self.lib_folder.text(),
-                                           "Altium project (*.PrjPcb)")
-        if f:
-            self.lib_folder.setText(f)
-            if not self.name.text().strip():
-                self.name.setText(Path(f).stem)
 
     def _mode(self, *_):
         self.tpl.setEnabled(self.start.currentText() == "From templates")
@@ -482,6 +573,7 @@ class MainWindow(QMainWindow):
         for wdg in (QLabel("JLCPCB type:"), self.jlc_type, self.only_stock, QLabel("Show:"), self.only_supplier, self.narrow):
             filters.addWidget(wdg)
         lay.addLayout(filters)
+        lay.addWidget(self._value_filters())
         self.results = _table(self.RESULT_COLUMNS)
         self.results.horizontalHeaderItem(6).setToolTip(self.jlc_type.toolTip())
         lay.addWidget(self.results)
@@ -516,12 +608,115 @@ class MainWindow(QMainWindow):
         self.rows = []
         return w
 
+    # ----- filters for resistor and capacitor value searches
+    def _value_filters(self) -> QWidget:
+        from . import valuesearch as V
+
+        box = QWidget()
+        row = QHBoxLayout(box)
+        row.setContentsMargins(0, 0, 0, 0)
+        self.f_size, self.f_volt, self.f_diel, self.f_tol, self.f_power = (QComboBox() for _ in range(5))
+        self.f_size.addItem("Any size", None)
+        for v in V.SIZES:
+            self.f_size.addItem(v, v)
+        self.f_volt.addItem("Any voltage", None)
+        for v in V.VOLTAGES:
+            self.f_volt.addItem(f"≥ {v:g} V", float(v))
+        self.f_diel.addItem("Any dielectric", None)
+        for v in V.DIELECTRICS:
+            self.f_diel.addItem(v, v)
+        self.f_power.addItem("Any power", None)
+        for v in V.POWERS:
+            self.f_power.addItem(f"≥ 1/{round(1 / v)} W" if v < 0.5 else f"≥ {v:g} W", v)
+        self.f_tol.setToolTip("Tolerance: this or tighter")
+        self.f_volt.setToolTip("Voltage rating: this or higher")
+        self.f_power.setToolTip("Power rating: this or higher")
+        self.f_diel.setToolTip("C0G (NP0): stable, small values. X7R: general use. X5R: big values, less stable.")
+        for c in (self.f_size, self.f_volt, self.f_diel, self.f_tol, self.f_power):
+            c.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+            c.activated.connect(self._value_filter_changed)
+        self.remember_btn = QPushButton("Remember as my usual")
+        self.remember_btn.setToolTip("Next time you type only a value, e.g. 100nF, these filters are filled in")
+        self.remember_btn.clicked.connect(self.remember_usual)
+        self.filter_label = QLabel("")
+        for wdg in (self.filter_label, self.f_size, self.f_volt, self.f_diel, self.f_tol, self.f_power,
+                    self.remember_btn):
+            row.addWidget(wdg)
+        row.addStretch()
+        self.value_filter_box = box
+        self.query = None
+        box.setVisible(False)
+        return box
+
+    def _show_query(self, q):
+        """Show the filters that fit this kind of part, set to what the query asks for."""
+        from . import valuesearch as V
+
+        self.query = q
+        self.value_filter_box.setVisible(q is not None)
+        if q is None:
+            return
+        cap = q.kind == "C"
+        self.filter_label.setText("Capacitor:" if cap else "Resistor:")
+        self.f_volt.setVisible(cap)
+        self.f_diel.setVisible(cap)
+        self.f_power.setVisible(not cap)
+        self.f_tol.clear()
+        self.f_tol.addItem("Any tolerance", None)
+        for t in V.TOLERANCES[q.kind]:
+            self.f_tol.addItem(f"±{t * 100:g}%", t)
+        for combo, value in ((self.f_size, q.package or None), (self.f_volt, q.voltage),
+                             (self.f_diel, q.dielectric or None), (self.f_tol, q.tolerance),
+                             (self.f_power, q.power)):
+            i = combo.findData(value)
+            if i < 0 and value is not None:  # typed something not in the list, e.g. 35V
+                combo.addItem(str(value), value)
+                i = combo.count() - 1
+            combo.setCurrentIndex(max(i, 0))
+
+    def _filters_from_combos(self) -> dict:
+        from . import valuesearch as V
+
+        combos = {"package": self.f_size, "voltage": self.f_volt, "dielectric": self.f_diel,
+                  "tolerance": self.f_tol, "power": self.f_power}
+        return {f: combos[f].currentData() for f in V.FILTER_FIELDS[self.query.kind]}
+
+    def _value_filter_changed(self, *_):
+        from . import valuesearch as V
+
+        if self.query is None:
+            return
+        self._start_search(self.search_box.text().strip(), V.with_filters(self.query, self._filters_from_combos()))
+
+    def remember_usual(self):
+        from . import valuesearch as V
+
+        if self.query is None:
+            return
+        f = self._filters_from_combos()
+        self.lib.settings.set_usual(self.query.kind, V.encode_filters(f))
+        self.lib.save_settings()
+        what = "capacitors" if self.query.kind == "C" else "resistors"
+        shown = ", ".join(c.currentText() for c in (self.f_size, self.f_volt, self.f_diel, self.f_tol, self.f_power)
+                          if c.isVisible() and c.currentData() is not None) or "no filters"
+        self.log(f"Your usual {what}: {shown}. Type only a value, e.g. "
+                 f"{'100nF' if self.query.kind == 'C' else '10k'}, and these are filled in.")
+
     def run_search(self):
+        from . import valuesearch as V
+
         text = self.search_box.text().strip()
         if not text:
             return
+        q = V.parse(text)
+        if q is not None:
+            q = V.with_filters(q, V.decode_filters(self.lib.settings.usual(q.kind)), only_unset=True)
+        self._start_search(text, q)
+
+    def _start_search(self, text: str, q):
+        self._show_query(q)
         self.search_btn.setEnabled(False)
-        self.search_msg.setText(f"Searching for {text}…")
+        self.search_msg.setText(f"Searching for {q.describe() if q else text}…")
         settings = self.lib.settings
         import threading
 
@@ -529,7 +724,7 @@ class MainWindow(QMainWindow):
 
         def work():
             try:
-                res = find_any(text, settings)
+                res = find_any(text, settings, query=q)
             except Exception as e:  # noqa: BLE001 - never let a search crash the window
                 from .search import SearchResult
 
@@ -1009,9 +1204,9 @@ class MainWindow(QMainWindow):
                                 "On: PartKit writes this project's parts into its own .SchLib/.PcbLib too.")
         self.own_lib.toggled.connect(self.toggle_own_library)
         self.proj_folder = QLabel("")
-        folder_btn = QPushButton("Choose Altium project…")
-        folder_btn.setToolTip("Pick your board's .PrjPcb: PartKit uses the .SchLib/.PcbLib already in it.\n"
-                              "If it has none, PartKit makes new ones next to it.")
+        folder_btn = QPushButton("Change library…")
+        folder_btn.setToolTip("Pick your board's Altium project or a folder; you see the exact .SchLib/.PcbLib "
+                              "before you press OK.")
         folder_btn.clicked.connect(self.change_project_folder)
         self.proj_status = QLabel("")
         resend = QPushButton("Re-send all parts")
@@ -1132,13 +1327,9 @@ class MainWindow(QMainWindow):
                              [p.name for p in projects.projects(self.lib)])
         if d.exec() != QDialog.Accepted:
             return
-        folder = d.lib_folder.text().strip()
-        files = self._choose_files(folder) if folder else ("", "")
-        if files is None:
-            return
         try:
             proj = projects.create(self.lib, d.name.text(), templates=d.templates(), copy_of=d.copy_of(),
-                                   folder=folder, schlib=files[0], pcblib=files[1])
+                                   folder=d.picker.path, schlib=d.picker.files[0], pcblib=d.picker.files[1])
         except (ValueError, KeyError) as e:
             QMessageBox.information(self, "PartKit", str(e.args[0]))
             return
@@ -1231,53 +1422,17 @@ class MainWindow(QMainWindow):
             projects.save(self.lib, proj)
             self.show_kit()
 
-    def _pick_altium_project(self, start: str = "") -> str:
-        f, _ = QFileDialog.getOpenFileName(self, "Your board's Altium project", start,
-                                           "Altium project (*.PrjPcb)")
-        return f
-
-    def _choose_files(self, path: str):
-        """(schlib, pcblib) to use for what was picked, asking only when there are several; None if cancelled."""
-        from PySide6.QtWidgets import QInputDialog
-
-        from . import projects
-
-        p = Path(path)
-        if p.suffix.lower() == ".prjpcb":
-            schs, pcbs = projects.libraries_in_prjpcb(p)
-        else:
-            schs, pcbs = projects.libraries_in(p.parent if p.is_file() else p)
-            if p.suffix.lower() == ".schlib":
-                schs = [p.name]
-            if p.suffix.lower() == ".pcblib":
-                pcbs = [p.name]
-        out = []
-        for kind, found in (("SchLib", schs), ("PcbLib", pcbs)):
-            if len(found) <= 1:
-                out.append(found[0] if found else "")
-                continue
-            names = [Path(f).name for f in found]
-            name, ok = QInputDialog.getItem(self, "PartKit", f"There are several .{kind} files. "
-                                            "Which one is this board's?", names, 0, False)
-            if not ok:
-                return None
-            out.append(found[names.index(name)])
-        return tuple(out)
-
     def change_project_folder(self):
         from . import projects
 
         proj = self._chosen_project()
         if not proj:
             return
-        f = self._pick_altium_project(proj.prjpcb or proj.folder)
-        if not f:
-            return
-        files = self._choose_files(f)
-        if files is None:
+        d = LibraryDialog(self, proj.name, proj.prjpcb or (proj.folder if proj.own_library else ""))
+        if d.exec() != QDialog.Accepted or not d.picker.path:
             return
         try:
-            projects.use_file(proj, f, *files)
+            projects.use_file(proj, d.picker.path, *d.picker.files)
         except ValueError as e:
             QMessageBox.information(self, "PartKit", str(e))
             return

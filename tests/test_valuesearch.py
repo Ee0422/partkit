@@ -115,3 +115,11 @@ def test_live_value_search(text):
     print(text, len(offers), [(o.supplier_pn, o.mpn, o.status, o.specs) for o in offers[:3]])
     assert offers, f"no JLCPCB parts for {text}"
     assert offers[0].status == "Basic", f"no Basic part first for {text}"
+
+
+def test_my_usual_fills_only_what_was_not_typed():
+    usual = V.decode_filters(V.encode_filters({"package": "0603", "voltage": 50.0, "dielectric": "X7R"}))
+    q = V.with_filters(V.parse("100nF 0805"), usual, only_unset=True)
+    assert (q.package, q.voltage, q.dielectric) == ("0805", 50.0, "X7R")
+    q = V.with_filters(q, {"package": None, "voltage": 16.0, "dielectric": None, "tolerance": None})
+    assert (q.package, q.voltage, q.dielectric) == ("", 16.0, "")
