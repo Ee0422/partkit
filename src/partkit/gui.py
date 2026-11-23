@@ -1822,7 +1822,7 @@ class MainWindow(QMainWindow):
         self.check_sync_result()
         job = self.lib.write_sync_job()
         if not job:
-            QMessageBox.information(self, "PartKit", "Your Altium libraries are already up to date.")
+            QMessageBox.information(self, "PartKit", self.lib.nothing_to_send_reason())
             return
         started, msg = start_sync(copy_scripts())
         if started:

@@ -302,6 +302,27 @@ class Library:
         return len(self.pending_changes()) + len(self.pending_removals()) + sum(
             len(projects.missing_from_library(self, pr)[0]) for pr in projects.projects(self) if pr.own_library)
 
+    def nothing_to_send_reason(self) -> str:
+        """Why Send found nothing to do: parts that can't go yet, or plain 'up to date'."""
+        from . import projects
+
+        uses: dict[str, list[str]] = {}
+        for pr in projects.projects(self):
+            for it in pr.items:
+                uses.setdefault(it.mpn, []).append(pr.name)
+        waiting = [p for p in self.parts() if p.stage == F.TO_CHECK]
+        waiting.sort(key=lambda p: (p.mpn not in uses, p.mpn))
+        if not waiting:
+            return "Your Altium libraries are already up to date."
+        lines = []
+        for p in waiting[:5]:
+            where = f" (in {', '.join(uses[p.mpn])})" if p.mpn in uses else ""
+            lines.append(f"{p.mpn}{where} is still To check.")
+        if len(waiting) > 5:
+            lines.append(f"...and {len(waiting) - 5} more.")
+        return ("Nothing to send yet. Only Ready parts go into Altium.\n\n" + "\n".join(lines)
+                + "\n\nSelect them in My parts and press Mark Ready, then Send again.")
+
     def write_sync_job(self, parts: list[Part] | None = None, dst: tuple[str, str] | None = None,
                        kind: str = "main", prjpcb: str = "") -> Path | None:
         """Write the job PartKit Sync runs inside Altium. Returns its path, or None if nothing to do.
