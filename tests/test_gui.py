@@ -122,3 +122,10 @@ def test_get_cad_works_without_any_supplier_keys(win, monkeypatch):
     p = win.lib.get("LM358DR")
     assert p and p.category == "ICs" and p.target_schlib == "Libraries/ICs.SchLib"
     assert "LM358DR" in opened[0]
+
+
+def test_key_fields_only_for_suppliers_in_the_list(win):
+    win.lib.settings.suppliers = ["JLCPCB", "Mouser"]
+    win.load_settings()
+    form = win.settings_form
+    assert form.isRowVisible(win.key_rows["Mouser"]) and not form.isRowVisible(win.key_rows["DigiKey"])

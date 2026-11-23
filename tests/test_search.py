@@ -199,3 +199,9 @@ def test_jlcpcb_needs_no_key_and_gives_c_numbers():
     assert p.params["Size"] == "0603" and not p.notes
     basic = JLCPCB(http=FakeHttp({"jlcsearch": JLC})).search("x")[0]
     assert basic.status == "Basic" and basic.unit_price(1) == 0.0006
+
+
+def test_lcsc_uses_the_same_free_search():
+    res = search.find("RC0603FR-071KL", Settings(suppliers=["LCSC"]), http=FakeHttp({"jlcsearch": JLC}))
+    o = res.exact[0]
+    assert (o.supplier, o.supplier_pn) == ("LCSC", "C114762") and "lcsc.com" in o.url and res.not_set_up == []

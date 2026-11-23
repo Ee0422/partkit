@@ -283,14 +283,23 @@ class JLCPCB:
         return out
 
 
-SUPPLIERS: dict[str, type] = {"DigiKey": DigiKey, "Mouser": Mouser, "Farnell": Farnell, "JLCPCB": JLCPCB}
-NO_KEY_NEEDED = {"JLCPCB"}
+class LCSC(JLCPCB):
+    """LCSC sells the same parts under the same C-numbers, so the same key-free search covers it."""
 
-# Suppliers PartKit can link to but not search (no free public API).
-LINK_ONLY: dict[str, str] = {
-    "LCSC": "https://www.lcsc.com/search?q={mpn}",
-}
+    name = "LCSC"
 
+    def search(self, mpn: str, limit: int = 10) -> list[Offer]:
+        out = super().search(mpn, limit)
+        for o in out:
+            o.supplier = self.name
+            o.url = f"https://www.lcsc.com/product-detail/{o.supplier_pn}.html"
+            o.status = ""  # Basic/Extended is a JLCPCB assembly idea
+        return out
+
+
+SUPPLIERS: dict[str, type] = {"DigiKey": DigiKey, "Mouser": Mouser, "Farnell": Farnell,
+                              "JLCPCB": JLCPCB, "LCSC": LCSC}
+NO_KEY_NEEDED = {"JLCPCB", "LCSC"}
 
 def supplier_link(name: str, mpn: str) -> str:
     q = urllib.parse.quote(mpn)
@@ -299,5 +308,5 @@ def supplier_link(name: str, mpn: str) -> str:
         "Mouser": f"https://www.mouser.com/c/?q={q}",
         "Farnell": f"https://uk.farnell.com/search?st={q}",
         "JLCPCB": f"https://jlcpcb.com/parts/componentSearch?searchTxt={q}",
-        **{k: v.format(mpn=q) for k, v in LINK_ONLY.items()},
+        "LCSC": f"https://www.lcsc.com/search?q={q}",
     }.get(name, "")

@@ -590,8 +590,15 @@ class MainWindow(QMainWindow):
         from . import credentials
 
         self.key_fields = {}
+        self.key_rows = {}
+        self.settings_form = form
+        note = QLabel("JLCPCB and LCSC need no key. DigiKey, Mouser and Farnell need a free key, asked "
+                      "for only when they're in your supplier list, and optional even then.")
+        note.setWordWrap(True)
+        form.addRow("Supplier keys", note)
         for sup, needed in credentials.NEEDED.items():
             row = QHBoxLayout()
+            self.key_rows[sup] = row
             for field in needed:
                 le = QLineEdit()
                 le.setEchoMode(QLineEdit.Password)
@@ -640,6 +647,8 @@ class MainWindow(QMainWindow):
         self.farnell_store.setText(s.farnell_store)
         from . import credentials
 
+        for sup, row in self.key_rows.items():
+            self.settings_form.setRowVisible(row, sup in s.suppliers)
         for (sup, field), le in self.key_fields.items():
             le.clear()
             le.setPlaceholderText(("saved" if credentials.get(sup, field) else "not set") + f": {field.replace('_', ' ')}")

@@ -59,7 +59,7 @@ partkit --help       # the command line
 
 1. **Find.** On *Find parts*, type a manufacturer part number and press
    Search. PartKit asks your preferred suppliers (JLCPCB, DigiKey, Mouser,
-   Farnell) in your order. JLCPCB needs no key: it gives the LCSC part number
+   Farnell, LCSC) in your order. JLCPCB and LCSC need no key: they give the LCSC part number
    (C-number), stock and whether the part is Basic or Extended. **Add to library** fills Manufacturer, Description,
    Datasheet, both supplier part numbers and the specs that tell same-size
    parts apart. **Get CAD files** opens your first preferred provider
