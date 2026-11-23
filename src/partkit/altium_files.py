@@ -161,3 +161,91 @@ def pcblib_info(path: Path) -> PcbLibInfo:
         return read_pcblib(ole)
     finally:
         ole.close()
+
+
+# ---------------- integrated libraries (.IntLib) ----------------
+
+OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+
+
+def _unpack(raw: bytes) -> bytes:
+    """IntLib streams are zlib-compressed copies of the source files; some carry a short header."""
+    import zlib
+
+    for off in (0, 4, 8):
+        try:
+            return zlib.decompress(raw[off:])
+        except zlib.error:
+            continue
+    return raw
+
+
+def _open_ole_bytes(data: bytes):
+    import io
+
+    import olefile
+
+    return olefile.OleFileIO(io.BytesIO(data))
+
+
+def _library_kind(ole, hint: str) -> str | None:
+    header = (_read(ole, ["FileHeader"]) or b"").upper()
+    if b"SCHEMATIC" in header:
+        return "schlib"
+    if b"PCB" in header or ole.exists("Library/Data"):
+        return "pcblib"
+    hint = hint.lower()
+    if hint.startswith("sch"):
+        return "schlib"
+    if hint.startswith("pcb") and "3d" not in hint:
+        return "pcblib"
+    return None
+
+
+def extract_intlib(ole, open_bytes=_open_ole_bytes) -> list[tuple[str, bytes]]:
+    """Source files packed inside an .IntLib, as (kind, bytes).
+
+    kind is "schlib", "pcblib" or "step". Altium stores each source library
+    zlib-compressed in its own stream (under SchLib/, PCBLib/ and PCB3DLib/);
+    rather than trust exact stream names, every stream is unpacked and
+    recognised by its content.
+    """
+    out: list[tuple[str, bytes]] = []
+    for path in ole.listdir():
+        raw = _read(ole, list(path)) or b""
+        if len(raw) < 16:
+            continue
+        data = _unpack(raw)
+        if data.startswith(OLE_MAGIC):
+            try:
+                inner = open_bytes(data)
+            except Exception:  # noqa: BLE001 - skip anything that isn't a readable library
+                continue
+            try:
+                kind = _library_kind(inner, path[0])
+            finally:
+                close = getattr(inner, "close", None)
+                if close:
+                    close()
+            if kind:
+                out.append((kind, data))
+        elif data.lstrip()[:12].upper().startswith(b"ISO-10303-21"):
+            out.append(("step", data))
+    return out
+
+
+def extract_intlib_file(path: Path, dest: Path) -> list[Path]:
+    """Write the .SchLib/.PcbLib/.step files inside an IntLib to dest. Returns the new files."""
+    ext = {"schlib": ".SchLib", "pcblib": ".PcbLib", "step": ".step"}
+    dest.mkdir(parents=True, exist_ok=True)
+    ole = open_ole(path)
+    try:
+        parts = extract_intlib(ole)
+    finally:
+        ole.close()
+    written = []
+    for i, (kind, data) in enumerate(parts):
+        f = dest / f"{Path(path).stem}-{i}{ext[kind]}"
+        f.write_bytes(data)
+        written.append(f)
+    return written

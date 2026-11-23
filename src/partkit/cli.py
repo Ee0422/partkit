@@ -73,7 +73,7 @@ def import_cmd(
     mpn: Optional[str] = typer.Option(None, help="Manufacturer part number, if the file name doesn't show it."),
     category: Optional[str] = typer.Option(None, help="One of: " + ", ".join(F.CATEGORIES)),
 ):
-    """Import a CAD zip (SnapMagic, SamacSys, Ultra Librarian, manufacturer) into Review."""
+    """Import a CAD download (.zip or .IntLib from SnapMagic, SamacSys, Ultra Librarian, manufacturer) into Review."""
     lib = open_lib()
     _check_category(category)
     try:

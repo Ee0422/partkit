@@ -15,7 +15,8 @@ part carries the same BOM fields.
 
 ## What it does
 
-- **Imports any CAD zip.** It finds the symbol, footprint and 3D model wherever
+- **Imports any CAD download.** Zips and single-file .IntLib downloads (SnapMagic)
+  both work. It finds the symbol, footprint and 3D model wherever
   they sit in the zip, including zips inside zips and mixed KiCad/Eagle/Altium
   bundles.
 - **Gives every footprint a 3D model.** If the model is already inside the
@@ -56,7 +57,7 @@ partkit --help       # the command line
 
 ## Using it
 
-1. **Import.** Drop CAD zips on the window, or tick *Watch my Downloads folder*.
+1. **Import.** Drop CAD zips or .IntLib files on the window, or tick *Watch my Downloads folder*.
 2. **Review.** On the Library tab, check the part, set its category and click
    **Approve**.
 3. **Send to Altium.** Click **Send to Altium**. PartKit starts PartKit Sync in
@@ -72,7 +73,7 @@ throwaway library.
 | Command | What it does |
 | --- | --- |
 | `init` | Create the library folder (and the starter pack) |
-| `import <zip>` | Import a CAD zip into Review |
+| `import <file>` | Import a CAD zip or .IntLib into Review |
 | `reimport <name>` | Import a zip again from the Archive folder |
 | `attach-3d <mpn> <step>` | Attach or replace a part's 3D model |
 | `watch` | Auto-import CAD downloads from Downloads |

@@ -21,7 +21,7 @@ from . import __version__
 from . import fields as F
 from .altium_launch import copy_scripts, start_sync
 from .config import HUNTING_MODES, default_library_path, remember_library_path
-from .importer import STEP_EXT, ImportProblem, attach_step, import_zip
+from .importer import DOWNLOAD_EXT, STEP_EXT, ImportProblem, attach_step, import_zip
 from .library import Library
 from .passives import install_starter_pack
 
@@ -288,14 +288,14 @@ class MainWindow(QMainWindow):
     def _import_tab(self) -> QWidget:
         w = QWidget()
         lay = QVBoxLayout(w)
-        drop = QLabel("Drop CAD zips (SnapMagic, SamacSys, Ultra Librarian, manufacturer)\n"
-                      "or .step files anywhere on this window")
+        drop = QLabel("Drop CAD downloads (SnapMagic, SamacSys, Ultra Librarian, manufacturer):\n"
+                      ".zip, .IntLib or .step files, anywhere on this window")
         drop.setAlignment(Qt.AlignCenter)
         drop.setMinimumHeight(120)
         drop.setStyleSheet("border: 2px dashed #888; border-radius: 8px; font-size: 14px;")
         lay.addWidget(drop)
         row = QHBoxLayout()
-        choose = QPushButton("Choose zip…")
+        choose = QPushButton("Choose file…")
         choose.clicked.connect(self.choose_zip)
         archive = QPushButton("Re-import from Archive…")
         archive.clicked.connect(self.reimport)
@@ -329,13 +329,13 @@ class MainWindow(QMainWindow):
 
     def choose_zip(self):
         files, _ = QFileDialog.getOpenFileNames(self, "Choose CAD downloads", str(Path.home() / "Downloads"),
-                                                "CAD downloads (*.zip)")
+                                                "CAD downloads (*.zip *.IntLib *.step *.stp)")
         for f in files:
             self.import_path(Path(f))
 
     def reimport(self):
         f, _ = QFileDialog.getOpenFileName(self, "Re-import from Archive", str(self.lib.root / "Archive"),
-                                           "CAD downloads (*.zip)")
+                                           "CAD downloads (*.zip *.IntLib *.step *.stp)")
         if f:
             self.import_path(Path(f))
 
@@ -350,7 +350,7 @@ class MainWindow(QMainWindow):
             class H(FileSystemEventHandler):
                 def _go(self, p):
                     path = Path(p)
-                    if path.suffix.lower() in {".zip"} | STEP_EXT and wait_until_complete(path):
+                    if path.suffix.lower() in DOWNLOAD_EXT and wait_until_complete(path):
                         handle_file(win.lib, path, win.bridge.message.emit)
 
                 def on_created(self, e):
