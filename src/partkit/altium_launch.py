@@ -58,27 +58,55 @@ def find_altium(search_roots: list[Path] | None = None) -> Path | None:
     return sorted(set(found), key=_version_key)[-1]
 
 
-def sync_command(x2: Path, prjscr: Path) -> list[str]:
-    """Altium's command-line form for running a script procedure."""
-    run = f'-RScriptingSystem:RunScript(ProjectName="{prjscr}"|ProcName="PartKitSync.pas>Run")'
-    return [str(x2), run]
+def sync_command(x2: Path, prjscr: Path) -> str:
+    """Altium's command line for running a script procedure.
+
+    Returned as one string: Windows passes it to Altium exactly as written.
+    (Passing a list made Python escape the quotes, and Altium then couldn't
+    find the script and showed an empty "Select Item To Run" box.)
+    """
+    return (f'"{x2}" -RScriptingSystem:RunScript('
+            f'ProjectName="{prjscr}"|ProcName="PartKitSync.pas>Run")')
+
+
+def altium_running() -> bool:
+    """True if Altium Designer (X2.exe) is already open."""
+    if os.name != "nt":
+        return False
+    try:
+        out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq X2.exe", "/NH"],
+                             capture_output=True, text=True, timeout=10,
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return "x2.exe" in out.lower()
+
+
+def manual_steps(prjscr: Path) -> str:
+    return (f"In Altium: File > Run Script > Browse, choose {prjscr}, then pick Run. "
+            "After the first time it stays in the Run Script list, so it's two clicks.")
 
 
 def start_sync(prjscr: Path | None = None, x2: Path | None = None) -> tuple[bool, str]:
-    """Ask Altium to run PartKit Sync. Returns (started, message for the user)."""
+    """Ask Altium to run PartKit Sync. Returns (started, message for the user).
+
+    If Altium is already open, PartKit doesn't start a second copy (Altium
+    can't hand a script to a running window); it says how to run it there.
+    """
     prjscr = prjscr or copy_scripts()
-    x2 = x2 or find_altium()
-    manual = ("In Altium: File > Run Script > Browse, choose "
-              f"{prjscr}, then pick Run.")
-    if x2 is None:
-        return False, "Altium Designer wasn't found automatically. " + manual
+    manual = manual_steps(prjscr)
     if os.name != "nt":
         return False, manual
+    if altium_running():
+        return False, "Altium is already open, so PartKit didn't start another copy. " + manual
+    x2 = x2 or find_altium()
+    if x2 is None:
+        return False, "Altium Designer wasn't found automatically. " + manual
     try:
         subprocess.Popen(sync_command(x2, prjscr), close_fds=True)
     except OSError as e:
         return False, f"Couldn't start Altium ({e}). " + manual
-    return True, ("Asked Altium to run PartKit Sync. If nothing happens within a minute, " + manual)
+    return True, "Starting Altium and PartKit Sync. If nothing happens within a minute, " + manual
 
 
 def scripts_are_current(dest: Path | None = None) -> bool:

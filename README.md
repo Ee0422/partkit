@@ -60,9 +60,11 @@ partkit --help       # the command line
 1. **Import.** Drop CAD zips or .IntLib files on the window, or tick *Watch my Downloads folder*.
 2. **Review.** On the Library tab, check the part, set its category and click
    **Approve**.
-3. **Send to Altium.** Click **Send to Altium**. PartKit starts PartKit Sync in
-   Altium, which writes the parts into your libraries. If Altium can't be
-   started automatically, PartKit tells you the one menu click to make instead.
+3. **Send to Altium.** Click **Send to Altium**. If Altium is closed, PartKit
+   opens it and runs PartKit Sync, which writes the parts into your libraries.
+   If Altium is already open, PartKit doesn't start a second copy: run it there
+   with File > Run Script > PartKitSync.PrjScr (it stays in that list after the
+   first time).
 4. **Check.** The Health check tab lists BOM gaps and missing or simple 3D models.
 
 Use **Settings > Test mode** (or `partkit --test`) to try things on a
