@@ -252,14 +252,18 @@ def import_zip(lib: Library, zip_path: Path, mpn: str | None = None, category: s
 
         existing = lib.get(mpn)
         if existing and existing.source == "PartKit":
-            messages.append(f"{mpn} is already in your starter pack. After approval, these vendor files "
-                            "replace the generic symbol and footprint.")
+            messages.append(f"{mpn} is already in your starter pack. After approval, the vendor's version "
+                            f"goes into your {existing.category} libraries.")
+        was_starter = existing is not None and existing.source == "PartKit"
         part = existing or Part(mpn=mpn)
         if category:
             part.category = category
         elif not existing:
             part.category = F.DEFAULT_CATEGORY
             messages.append("Category set to Misc; choose the right one before approving.")
+        if category or was_starter:
+            # vendor files go to the category's own libraries, not the generic starter libraries
+            part.target_schlib, part.target_pcblib = lib.settings.target_libs(part.category)
         for k, v in params.items():
             part.params.setdefault(k, v)
         part.stage = "Review"

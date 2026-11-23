@@ -23,11 +23,21 @@ def test_find_altium_picks_newest(tmp_path):
 
 def test_sync_command_format(tmp_path):
     cmd = A.sync_command(Path("C:/Altium/AD26/X2.exe"), Path("C:/PartKit Scripts/PartKitSync.PrjScr"))
-    assert cmd[1].startswith("-RScriptingSystem:RunScript(ProjectName=")
-    assert 'ProcName="PartKitSync.pas>Run"' in cmd[1]
+    assert isinstance(cmd, str)  # a list would get its quotes escaped on Windows
+    assert ' -RScriptingSystem:RunScript(ProjectName="' in cmd
+    assert 'PartKit Scripts' in cmd and '\\"' not in cmd
+    assert cmd.endswith('|ProcName="PartKitSync.pas>Run")')
 
 
 def test_start_sync_without_altium_explains(tmp_path, monkeypatch):
     monkeypatch.setattr(A, "find_altium", lambda: None)
     started, msg = A.start_sync(prjscr=tmp_path / "PartKitSync.PrjScr")
     assert not started and "File > Run Script" in msg
+
+
+def test_start_sync_uses_open_altium(tmp_path, monkeypatch):
+    monkeypatch.setattr(A.os, "name", "nt")
+    monkeypatch.setattr(A, "altium_running", lambda: True)
+    monkeypatch.setattr(A.subprocess, "Popen", lambda *a, **k: (_ for _ in ()).throw(AssertionError("started")))
+    started, msg = A.start_sync(prjscr=tmp_path / "PartKitSync.PrjScr")
+    assert not started and "already open" in msg and "File > Run Script" in msg

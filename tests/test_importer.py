@@ -163,3 +163,15 @@ def test_unreadable_intlib_explains(tmp_path, lib, fake_altium, monkeypatch):
     f.write_bytes(b"intlib")
     with pytest.raises(importer.ImportProblem, match="Extract Sources"):
         importer.import_zip(lib, f)
+
+
+def test_vendor_import_of_starter_part_goes_to_category_library(tmp_path, lib, fake_altium):
+    from partkit.importer import import_zip
+    from partkit.passives import install_starter_pack
+
+    install_starter_pack(lib)
+    assert "Generic" in lib.get("RC0603FR-071KL").target_schlib
+    z = make_zip(tmp_path / "RC0603FR-071KL.zip", {"a.SchLib": b"SYM:RC0603FR-071KL", "a.PcbLib": b"FP:RESC1607X60N"})
+    part = import_zip(lib, z).part
+    assert part.target_schlib == "Libraries/Resistors.SchLib"
+    assert part.target_pcblib == "Libraries/Resistors.PcbLib"
