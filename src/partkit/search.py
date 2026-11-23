@@ -15,7 +15,7 @@ from . import credentials
 from . import fields as F
 from .config import Settings
 from .library import Library, Part
-from .suppliers import SUPPLIERS, Http, Offer, SupplierError, default_http
+from .suppliers import NO_KEY_NEEDED, SUPPLIERS, Http, Offer, SupplierError, default_http
 
 
 @dataclass
@@ -60,7 +60,7 @@ def find(mpn: str, settings: Settings, http: Http = default_http, clients: dict 
             continue  # link-only suppliers such as LCSC
         if clients and name in clients:
             client = clients[name]
-        elif credentials.is_set_up(name):
+        elif name in NO_KEY_NEEDED or credentials.is_set_up(name):
             client = make_client(name, settings, http)
         else:
             res.not_set_up.append(name)
@@ -74,7 +74,7 @@ def find(mpn: str, settings: Settings, http: Http = default_http, clients: dict 
         if not found:
             res.messages.append(f"{name}: no match for {res.mpn}")
     if res.not_set_up and not res.offers:
-        if len(res.not_set_up) == len([n for n in settings.suppliers if n in SUPPLIERS]):
+        if len(res.not_set_up) == len([n for n in settings.suppliers if n in SUPPLIERS and n not in NO_KEY_NEEDED]):
             res.messages.append(
                 "No supplier keys set up, and that's fine: click Get CAD files to fetch the part. "
                 "(Optional: a free Mouser key also fills in supplier numbers, stock and price.)")
@@ -271,7 +271,7 @@ def apply_offers(part: Part, offers: list[Offer], overwrite: bool = False) -> li
     elif part.category.startswith("Capacitors") and part.params.get("Capacitance"):
         put("Value", part.params["Capacitance"])
     status = next((o.status for o in offers if o.status), "")
-    if status and status.lower() not in ("active", "new product", "new"):
+    if status and status.lower() not in ("active", "new product", "new", "basic", "preferred", "extended"):
         note = f"Supplier status: {status}"
         if note not in part.notes:
             part.notes.append(note)

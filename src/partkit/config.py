@@ -14,7 +14,7 @@ from pathlib import Path
 
 SETTINGS_FILE = "partkit-settings.toml"
 
-DEFAULT_SUPPLIERS = ["DigiKey", "Mouser", "Farnell", "LCSC"]
+DEFAULT_SUPPLIERS = ["JLCPCB", "DigiKey", "Mouser", "Farnell", "LCSC"]
 DEFAULT_PROVIDERS = ["SnapMagic", "SamacSys", "Manufacturer", "UltraLibrarian"]
 HUNTING_MODES = ("off", "ask", "always")
 

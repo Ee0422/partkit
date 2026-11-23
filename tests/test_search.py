@@ -6,7 +6,7 @@ import pytest
 from partkit import credentials, providers, search
 from partkit.config import Settings, load_settings, save_settings
 from partkit.library import Part
-from partkit.suppliers import DigiKey, Farnell, Mouser, Offer, SupplierError
+from partkit.suppliers import JLCPCB, DigiKey, Farnell, Mouser, Offer, SupplierError
 
 # Replies shaped like the real APIs (trimmed).
 DIGIKEY = {
@@ -170,10 +170,32 @@ def test_credentials_from_environment(monkeypatch):
 
 def test_old_settings_gain_new_suppliers(tmp_path):
     save_settings(tmp_path, Settings(suppliers=["Mouser", "DigiKey"]))
-    assert load_settings(tmp_path).suppliers == ["Mouser", "DigiKey", "Farnell", "LCSC"]
+    assert load_settings(tmp_path).suppliers == ["Mouser", "DigiKey", "JLCPCB", "Farnell", "LCSC"]
 
 
 def test_no_keys_at_all_is_fine(monkeypatch):
     monkeypatch.setattr(credentials, "is_set_up", lambda name: False)
-    res = search.find("LM358DR", Settings())
+    res = search.find("LM358DR", Settings(suppliers=["DigiKey", "Mouser", "LCSC"]))
     assert any("that's fine" in m and "Get CAD files" in m for m in res.messages)
+
+
+JLC = {"components": [
+    {"lcsc": 21190, "mfr": "0603WAF1001T5E", "package": "0603", "description": "1kΩ ±1% 100mW",
+     "stock": 30000000, "price": "0.0006", "is_basic": True},
+    {"lcsc": 114762, "mfr": "RC0603FR-071KL", "package": "0603", "description": "1kΩ ±1% 100mW Thick Film Resistor",
+     "stock": 450000, "price": 0.0011, "is_basic": False},
+]}
+
+
+def test_jlcpcb_needs_no_key_and_gives_c_numbers():
+    http = FakeHttp({"jlcsearch": JLC})
+    res = search.find("RC0603FR-071KL", Settings(suppliers=["JLCPCB", "Mouser"]), http=http)
+    assert [(o.supplier, o.supplier_pn, o.status) for o in res.exact] == [("JLCPCB", "C114762", "Extended")]
+    q = urllib.parse.parse_qs(urllib.parse.urlparse(http.calls[0][1]).query)
+    assert q["q"] == ["RC0603FR-071KL"]
+    p = Part(mpn="RC0603FR-071KL", category="Resistors")
+    search.apply_offers(p, res.best())
+    assert p.params["Supplier 1"] == "JLCPCB" and p.params["Supplier Part Number 1"] == "C114762"
+    assert p.params["Size"] == "0603" and not p.notes
+    basic = JLCPCB(http=FakeHttp({"jlcsearch": JLC})).search("x")[0]
+    assert basic.status == "Basic" and basic.unit_price(1) == 0.0006

@@ -240,7 +240,51 @@ class Farnell:
         return out
 
 
-SUPPLIERS: dict[str, type] = {"DigiKey": DigiKey, "Mouser": Mouser, "Farnell": Farnell}
+# ---------------------------------------------------------------- JLCPCB (no key needed)
+
+class JLCPCB:
+    """JLCPCB/LCSC parts through jlcsearch, an open, key-free mirror of JLCPCB's parts list.
+
+    JLCPCB's own API needs an approved application, so this gives JLCPCB
+    users their LCSC part numbers (C-numbers), stock and Basic/Extended
+    status without any sign-up. It's run by the tscircuit project.
+    """
+
+    name = "JLCPCB"
+    SEARCH_URL = "https://jlcsearch.tscircuit.com/api/search"
+
+    def __init__(self, http: Http = default_http, keys: dict | None = None):
+        self.http = http
+
+    def search(self, mpn: str, limit: int = 10) -> list[Offer]:
+        q = urllib.parse.urlencode({"q": mpn, "limit": str(limit), "full": "true"})
+        r = self.http("GET", f"{self.SEARCH_URL}?{q}", {}, None)
+        out = []
+        for c in r.get("components") or []:
+            lcsc = str(c.get("lcsc", "")).strip()
+            if not lcsc:
+                continue
+            code = lcsc if lcsc.upper().startswith("C") else f"C{lcsc}"
+            basic = c.get("is_basic", c.get("basic"))
+            preferred = c.get("is_preferred", c.get("preferred"))
+            status = "Basic" if basic else ("Preferred" if preferred else ("Extended" if basic is not None else ""))
+            price = _price(c.get("price", "")) if not isinstance(c.get("price"), (int, float)) else float(c["price"])
+            out.append(Offer(
+                supplier=self.name, supplier_pn=code, mpn=str(c.get("mfr", "")),
+                manufacturer=str(c.get("manufacturer", "") or ""),
+                description=str(c.get("description", "") or ""),
+                datasheet=str(c.get("datasheet", "") or ""),
+                url=f"https://jlcpcb.com/partdetail/{code}",
+                stock=_num(c.get("stock")),
+                price_breaks=[(1, price)] if price is not None else [], currency="USD",
+                status=status, category=str(c.get("category", "") or c.get("subcategory", "") or ""),
+                specs={"Package / Case": str(c.get("package", ""))} if c.get("package") else {},
+            ))
+        return out
+
+
+SUPPLIERS: dict[str, type] = {"DigiKey": DigiKey, "Mouser": Mouser, "Farnell": Farnell, "JLCPCB": JLCPCB}
+NO_KEY_NEEDED = {"JLCPCB"}
 
 # Suppliers PartKit can link to but not search (no free public API).
 LINK_ONLY: dict[str, str] = {
@@ -254,5 +298,6 @@ def supplier_link(name: str, mpn: str) -> str:
         "DigiKey": f"https://www.digikey.com/en/products/result?keywords={q}",
         "Mouser": f"https://www.mouser.com/c/?q={q}",
         "Farnell": f"https://uk.farnell.com/search?st={q}",
+        "JLCPCB": f"https://jlcpcb.com/parts/componentSearch?searchTxt={q}",
         **{k: v.format(mpn=q) for k, v in LINK_ONLY.items()},
     }.get(name, "")
