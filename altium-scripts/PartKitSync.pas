@@ -98,7 +98,9 @@ end;
 function OpenSchLib(Path : String) : ISch_Lib;
 var Doc : IServerDocument;
 begin
-  Result := nil;
+  { already open: reuse it, so Altium doesn't jump between tabs for every part }
+  Result := SchServer.GetSchDocumentByPath(Path);
+  if Result <> nil then Exit;
   if not FileExists(Path) then
   begin
     ForceDirectories(ExtractFilePath(Path));
@@ -272,7 +274,9 @@ end;
 function OpenPcbLib(Path : String) : IPCB_Library;
 var Doc : IServerDocument;
 begin
-  Result := nil;
+  { already open: reuse it, so Altium doesn't jump between tabs for every part }
+  Result := PCBServer.GetPCBLibraryByPath(Path);
+  if Result <> nil then Exit;
   if not FileExists(Path) then
   begin
     ForceDirectories(ExtractFilePath(Path));
