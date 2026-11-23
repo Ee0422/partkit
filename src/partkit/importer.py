@@ -251,10 +251,7 @@ def import_zip(lib: Library, zip_path: Path, mpn: str | None = None, category: s
         params["Manufacturer Part Number"] = mpn
 
         existing = lib.get(mpn)
-        if existing and existing.source == "PartKit":
-            messages.append(f"{mpn} is already in your starter pack. After approval, the vendor's version "
-                            f"goes into your {existing.category} libraries.")
-        was_starter = existing is not None and existing.source == "PartKit"
+        was_starter = existing is not None and existing.source == "PartKit"  # from older PartKit versions
         part = existing or Part(mpn=mpn)
         if category:
             part.category = category
@@ -262,7 +259,7 @@ def import_zip(lib: Library, zip_path: Path, mpn: str | None = None, category: s
             part.category = F.DEFAULT_CATEGORY
             messages.append("Category set to Misc; choose the right one before approving.")
         if category or was_starter:
-            # vendor files go to the category's own libraries, not the generic starter libraries
+            # vendor files go to the category's own libraries, not the old generic libraries
             part.target_schlib, part.target_pcblib = lib.settings.target_libs(part.category)
         for k, v in params.items():
             part.params.setdefault(k, v)

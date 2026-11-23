@@ -13,6 +13,7 @@ dependencies = [
   "olefile>=0.46",
   "typer>=0.12",
   "rich>=13",
+  "keyring>=24",
   "watchdog>=4",
   "tomli>=2; python_version < '3.11'",
 ]
@@ -31,7 +32,7 @@ partkit-gui = "partkit.gui:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-partkit = ["data/*.json", "altium/*"]
+partkit = ["altium/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

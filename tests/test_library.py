@@ -1,5 +1,7 @@
+import pytest
+
 from partkit.config import Settings, load_settings, save_settings
-from partkit.library import Library, Part
+from partkit.library import Part
 
 
 def test_settings_roundtrip(tmp_path):
@@ -48,12 +50,18 @@ def test_safe_names_for_odd_mpns(lib):
     assert lib.get("LM317/T").mpn == "LM317/T"
 
 
-def test_sync_job_has_generic_footprints(lib):
-    from partkit.passives import install_starter_pack
-    install_starter_pack(lib, sizes=("0603",))
+def test_no_partkit_drawn_footprints_and_old_starter_parts_can_go(lib):
+    old = Part(mpn="RC0603FR-0710KL", category="Resistors", source="PartKit", stage="Released", needs_sync=True)
+    lib.save(old)
+    lib.save(Part(mpn="LM358DR", category="ICs", source="SnapMagic", symbol="LM358", footprint="SOIC8",
+                  stage="Released", needs_sync=True))
     job = lib.write_sync_job().read_text(encoding="utf-8-sig")
-    assert "[FOOTPRINT]" in job and "NAME=RESC1608X55N" in job and "PAD_X_MM=0.825" in job
-    assert "GENERIC=1" in job
+    assert "[FOOTPRINT]" not in job and "GENERIC=1" not in job
+    assert any("starter" in i.problem for i in lib.health_check())
+    with pytest.raises(KeyError, match="never checked"):
+        lib.approve(old.mpn)
+    assert lib.remove_starter_parts() == 1
+    assert lib.get(old.mpn) is None and lib.get("LM358DR")
 
 
 def test_imported_passive_without_specs_is_named_by_mpn():

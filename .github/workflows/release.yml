@@ -22,7 +22,7 @@ jobs:
         run: |
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"; else echo "version=0.0.0-dev" >> "$GITHUB_OUTPUT"; fi
       - name: Build app
-        run: pyinstaller --noconfirm --windowed --name PartKit --collect-data partkit installer/partkit_app.py
+        run: pyinstaller --noconfirm --windowed --name PartKit --collect-data partkit --hidden-import keyring.backends.Windows installer/partkit_app.py
       - name: Build installer
         run: |
           choco install innosetup -y --no-progress

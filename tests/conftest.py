@@ -1,3 +1,6 @@
+import os
+os.environ.setdefault("PYTHON_KEYRING_BACKEND", "keyring.backends.null.Keyring")  # never touch a real password store
+
 import io
 import zipfile
 from pathlib import Path

@@ -4,14 +4,13 @@
 
 PartKit is a free, open-source Windows tool. It takes the CAD zips you download from
 SnapMagic, SamacSys, Ultra Librarian or a manufacturer and files them into the
-Altium libraries you choose, together with their 3D models. It also gives you a
-ready-made library of common resistors and capacitors, and makes sure every
-part carries the same BOM fields.
+Altium libraries you choose, together with their 3D models, and makes sure every
+part carries the same BOM fields. You build one checked library that every
+project uses.
 
-> **Status: early development (milestone 2 of 6).** It has a desktop window, an
-> installer build, and starts the Altium script for you. PartKit Sync has synced the
-> 381-part starter pack in Altium Designer 26. Importing vendor zips into Altium is
-> being tested now. Supplier search comes in milestone 3.
+> **Status: early development.** It has a desktop window, an installer build, and
+> starts the Altium script for you. Importing SnapMagic downloads into Altium
+> Designer 26 works. Supplier search (JLCPCB with no key) is being tested now.
 
 ## What it does
 
@@ -30,9 +29,10 @@ part carries the same BOM fields.
 - **Tells variants apart.** Two 0603 100 nF capacitors at 16 V X5R and 50 V X7R
   are separate parts. Each category has the columns that tell its variants
   apart: voltage, dielectric, tolerance, height and so on.
-- **Includes a starter pack.** It has 366 resistors (E24 1% plus 0 Ω jumpers) and
-  15 common capacitors in 0402, 0603 and 0805. Shared footprints are named to
-  IPC-7351B, with height classes. No API key is needed.
+- **Finds JLCPCB parts by value.** Type `1k 0603 1%` or `100nF 0603 50V X7R` and
+  PartKit lists the matching JLCPCB parts, Basic first, one row per part with
+  value, size, tolerance, rating, dielectric, stock and price. Show Basic only
+  or Extended only, in stock only, one supplier, or narrow by typing. No API key is needed.
 - **Keeps the BOM clean.** Every part gets Manufacturer, Manufacturer Part
   Number, Description, Value, Supplier 1 and Supplier Part Number 1. Comment
   shows the value. A health check flags gaps before they reach a BOM.
@@ -57,15 +57,32 @@ partkit --help       # the command line
 
 ## Using it
 
-1. **Import.** Drop CAD zips or .IntLib files on the window, or tick *Watch my Downloads folder*.
-2. **Review.** On the Library tab, check the part, set its category and click
+1. **Find.** On *Find parts*, type a manufacturer part number, or a resistor or
+   capacitor value such as `1k 0603 1%`, and press Search. PartKit asks the
+   supplier you buy from (*Settings > I buy from*, JLCPCB by default) and an
+   optional second one. JLCPCB and LCSC need no key: they give the LCSC part number
+   (C-number), stock and whether the part is Basic (no extra assembly fee) or
+   Extended (about US$3 extra per part type). If a part number isn't in JLCPCB's
+   list, PartKit says so: JLCPCB only lists parts it stocks. **Add to library** fills Manufacturer, Description,
+   Datasheet, both supplier part numbers and the specs that tell same-size
+   parts apart. **Get CAD files** opens your first preferred provider
+   (SnapMagic, SamacSys, Ultra Librarian); download the Altium files there and
+   PartKit imports them. If that provider doesn't have the part, click
+   **Try next provider**. With hunting on, wider searches follow your list.
+   **No API keys are needed.** Without them, Get CAD files still opens the
+   part, and the CAD file fills in Manufacturer, MPN and Description. A
+   supplier key is optional and adds supplier numbers, stock, price and
+   specs. Mouser's is the quickest to get (one form, key by email); add it in
+   *Settings*. Keys stay in Windows Credential Manager.
+2. **Import.** Drop CAD zips or .IntLib files on the window, or tick *Watch my Downloads folder*.
+3. **Review.** On the Library tab, check the part, set its category and click
    **Approve**.
-3. **Send to Altium.** Click **Send to Altium**. If Altium is closed, PartKit
+4. **Send to Altium.** Click **Send to Altium**. If Altium is closed, PartKit
    opens it and runs PartKit Sync, which writes the parts into your libraries.
    If Altium is already open, PartKit doesn't start a second copy: run it there
    with File > Run Script > PartKitSync.PrjScr (it stays in that list after the
    first time).
-4. **Check.** The Health check tab lists BOM gaps and missing or simple 3D models.
+5. **Check.** The Health check tab lists BOM gaps and missing or simple 3D models.
 
 Use **Settings > Test mode** (or `partkit --test`) to try things on a
 throwaway library.
@@ -74,7 +91,11 @@ throwaway library.
 
 | Command | What it does |
 | --- | --- |
-| `init` | Create the library folder (and the starter pack) |
+| `init` | Create the library folder |
+| `keys <supplier>` | Save a DigiKey, Mouser or Farnell API key |
+| `search <mpn or value> [--basic]` | Look a part up, or find JLCPCB parts by value (`"1k 0603 1%"`) |
+| `add <mpn>` | Add a part from search, with supplier numbers and specs |
+| `cad <mpn> [--next]` | Open your preferred CAD provider (or the next one) for a part |
 | `import <file>` | Import a CAD zip or .IntLib into Review |
 | `reimport <name>` | Import a zip again from the Archive folder |
 | `attach-3d <mpn> <step>` | Attach or replace a part's 3D model |
@@ -89,19 +110,20 @@ throwaway library.
 | `gui` | Open the window |
 | `set-target <category> <schlib> <pcblib>` | Choose the libraries a category goes into |
 | `set-hunting off/ask/always` | Hunt beyond your preferred providers only when they can't find a part |
+| `remove-starter` | Take out the unchecked starter passives older versions added |
 | `test-reset` | Reset the test library (with `--test`) |
 
 ## Roadmap
 
 1. Library core and import
-2. Desktop window, installer, automatic start of PartKit Sync (this release; code signing to follow)
-3. Supplier search (DigiKey, Mouser, Farnell), provider preferences, hunting
-4. Passive picker and more starter packs
-5. Library screen and full health check
-6. Version 1.0
+2. Desktop window, installer, automatic start of PartKit Sync (code signing to follow)
+3. Supplier search (JLCPCB and LCSC with no key, DigiKey, Mouser, Farnell), value search, hunting (this release)
+4. Reuse checked parts: "New value from this part" and "New part from this footprint"
+5. Favourites and kits, with a starting parts list per project
+6. Import your existing Altium libraries
+7. Version 1.0
 
 ## Licence
 
-MIT. The starter-pack symbols and footprints are PartKit's own and are free to
-share. Models you download from SnapMagic, SamacSys or Ultra Librarian stay on
+MIT. Models you download from SnapMagic, SamacSys or Ultra Librarian stay on
 your PC under those sites' terms.
