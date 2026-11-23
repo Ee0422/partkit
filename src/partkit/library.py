@@ -163,6 +163,9 @@ class Library:
     # ---------- stages ----------
     def approve(self, mpn: str) -> Part:
         part = self._require(mpn)
+        if part.source != "PartKit" and not (part.symbol and part.footprint):
+            raise KeyError(f"{mpn} has no symbol or footprint yet. Get its CAD files first "
+                           "(Search > Get CAD files, or import a download).")
         part.stage = "Released"
         part.needs_sync = True
         self.save(part)

@@ -230,6 +230,91 @@ def gui():
     raise typer.Exit(gui_main([]))
 
 
+# ---------------------------------------------------------------- finding parts
+
+@app.command()
+def keys(supplier: str = typer.Argument(..., help="DigiKey, Mouser or Farnell")):
+    """Save a supplier's free API key in Windows Credential Manager."""
+    from . import credentials
+
+    name = next((n for n in credentials.NEEDED if n.lower() == supplier.lower()), None)
+    if not name:
+        console.print(f"[red]Use one of: {', '.join(credentials.NEEDED)}[/]")
+        raise typer.Exit(1)
+    console.print(f"Get a free key at {credentials.SIGNUP[name]}")
+    for field in credentials.NEEDED[name]:
+        value = typer.prompt(f"{name} {field.replace('_', ' ')}", hide_input=True, default="", show_default=False)
+        credentials.set(name, field, value.strip())
+    console.print(f"{name} is {'set up' if credentials.is_set_up(name) else 'not set up'}.")
+
+
+def _offers_table(offers) -> Table:
+    t = Table("Supplier", "Supplier PN", "MPN", "Manufacturer", "Stock", "Price @1", "Description")
+    for o in offers:
+        price = o.unit_price(1)
+        t.add_row(o.supplier, o.supplier_pn, o.mpn, o.manufacturer,
+                  "" if o.stock is None else f"{o.stock:,}",
+                  "" if price is None else f"{price:g} {o.currency}".strip(), o.description)
+    return t
+
+
+@app.command("search")
+def search_cmd(mpn: str):
+    """Look a part up at your preferred suppliers."""
+    from .search import find
+
+    res = find(mpn, open_lib().settings)
+    for m in res.messages:
+        console.print(f"[yellow]{m}[/]")
+    if res.offers:
+        console.print(_offers_table(res.exact or res.offers))
+
+
+@app.command()
+def add(mpn: str, category: Optional[str] = typer.Option(None, help="Leave out to let PartKit guess.")):
+    """Add a part from supplier search: fills Manufacturer, Description, Datasheet, supplier numbers and specs."""
+    from .search import add_from_search, find
+
+    lib = open_lib()
+    _check_category(category)
+    res = find(mpn, lib.settings)
+    for m in res.messages:
+        console.print(f"[yellow]{m}[/]")
+    if not res.offers:
+        console.print(f"[red]{mpn} wasn't found, so nothing was added.[/]")
+        raise typer.Exit(1)
+    part = add_from_search(lib, mpn, res.best(), category=category)
+    console.print(f"{part.mpn} added to Review as {part.category}. Next: [bold]partkit cad {part.mpn}[/]")
+
+
+@app.command()
+def cad(mpn: str, next_: bool = typer.Option(False, "--next", help="Try the next provider in your order.")):
+    """Open your preferred CAD provider for a part; the Downloads watcher imports what you download."""
+    from .providers import cad_sources, open_source
+
+    lib = open_lib()
+    part = lib.get(mpn)
+    srcs = cad_sources(mpn, lib.settings)
+    if not srcs:
+        console.print("[red]No CAD providers in your settings.[/]")
+        raise typer.Exit(1)
+    state = lib.root / "partkit-data" / "cad-next.txt"
+    idx = 0
+    if next_ and state.exists():
+        name, _, n = state.read_text(encoding="utf-8").partition("|")
+        idx = int(n) + 1 if name == mpn and n.isdigit() else 0
+    if idx >= len(srcs):
+        console.print("No more providers to try. Turn hunting on (partkit set-hunting ask) to search wider.")
+        raise typer.Exit(1)
+    state.write_text(f"{mpn}|{idx}", encoding="utf-8")
+    src = srcs[idx]
+    open_source(src)
+    console.print(f"Opened {src.name}{' (hunting)' if src.hunting else ''}: {src.url}")
+    console.print("Download the Altium files there. With [bold]partkit watch[/] running, they import by themselves.")
+    if part is None:
+        console.print(f"Tip: run [bold]partkit add {mpn}[/] first so supplier details are filled in too.")
+
+
 @app.command("set-target")
 def set_target(category: str, schlib: str, pcblib: str):
     """Choose which .SchLib and .PcbLib a category goes into."""

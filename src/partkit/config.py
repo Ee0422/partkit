@@ -14,7 +14,7 @@ from pathlib import Path
 
 SETTINGS_FILE = "partkit-settings.toml"
 
-DEFAULT_SUPPLIERS = ["DigiKey", "Mouser", "LCSC"]
+DEFAULT_SUPPLIERS = ["DigiKey", "Mouser", "Farnell", "LCSC"]
 DEFAULT_PROVIDERS = ["SnapMagic", "SamacSys", "Manufacturer", "UltraLibrarian"]
 HUNTING_MODES = ("off", "ask", "always")
 
@@ -54,6 +54,10 @@ class Settings:
     # Category -> {"schlib": "...", "pcblib": "..."}; paths relative to the library
     # folder or absolute. Categories not listed use Libraries/<Category>.SchLib/.PcbLib.
     targets: dict[str, dict[str, str]] = field(default_factory=dict)
+    # Which regional site and currency supplier searches use.
+    digikey_site: str = "US"
+    digikey_currency: str = "USD"
+    farnell_store: str = "uk.farnell.com"
 
     def target_libs(self, category: str) -> tuple[str, str]:
         t = self.targets.get(category, {})
@@ -96,6 +100,9 @@ def load_settings(library: Path) -> Settings:
     data = tomllib.loads(path.read_text(encoding="utf-8"))
     known = {k: v for k, v in data.items() if k in Settings.__dataclass_fields__}
     s = Settings(**known)
+    # suppliers/providers added in newer versions appear at the end of your list
+    s.suppliers += [x for x in DEFAULT_SUPPLIERS if x not in s.suppliers]
+    s.providers += [x for x in DEFAULT_PROVIDERS if x not in s.providers]
     s.validate()
     return s
 

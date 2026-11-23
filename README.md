@@ -57,15 +57,26 @@ partkit --help       # the command line
 
 ## Using it
 
-1. **Import.** Drop CAD zips or .IntLib files on the window, or tick *Watch my Downloads folder*.
-2. **Review.** On the Library tab, check the part, set its category and click
+1. **Find.** On *Find parts*, type a manufacturer part number and press
+   Search. PartKit asks your preferred suppliers (DigiKey, Mouser, Farnell)
+   in your order. **Add to library** fills Manufacturer, Description,
+   Datasheet, both supplier part numbers and the specs that tell same-size
+   parts apart. **Get CAD files** opens your first preferred provider
+   (SnapMagic, SamacSys, Ultra Librarian); download the Altium files there and
+   PartKit imports them. If that provider doesn't have the part, click
+   **Try next provider**. With hunting on, wider searches follow your list.
+   Searching needs a free API key from each supplier you want to use
+   (*Settings*, "Get a free key"). Keys stay in Windows Credential Manager.
+   Your starter pack and imports work without any keys.
+2. **Import.** Drop CAD zips or .IntLib files on the window, or tick *Watch my Downloads folder*.
+3. **Review.** On the Library tab, check the part, set its category and click
    **Approve**.
-3. **Send to Altium.** Click **Send to Altium**. If Altium is closed, PartKit
+4. **Send to Altium.** Click **Send to Altium**. If Altium is closed, PartKit
    opens it and runs PartKit Sync, which writes the parts into your libraries.
    If Altium is already open, PartKit doesn't start a second copy: run it there
    with File > Run Script > PartKitSync.PrjScr (it stays in that list after the
    first time).
-4. **Check.** The Health check tab lists BOM gaps and missing or simple 3D models.
+5. **Check.** The Health check tab lists BOM gaps and missing or simple 3D models.
 
 Use **Settings > Test mode** (or `partkit --test`) to try things on a
 throwaway library.
@@ -75,6 +86,10 @@ throwaway library.
 | Command | What it does |
 | --- | --- |
 | `init` | Create the library folder (and the starter pack) |
+| `keys <supplier>` | Save a DigiKey, Mouser or Farnell API key |
+| `search <mpn>` | Look a part up at your preferred suppliers |
+| `add <mpn>` | Add a part from search, with supplier numbers and specs |
+| `cad <mpn> [--next]` | Open your preferred CAD provider (or the next one) for a part |
 | `import <file>` | Import a CAD zip or .IntLib into Review |
 | `reimport <name>` | Import a zip again from the Archive folder |
 | `attach-3d <mpn> <step>` | Attach or replace a part's 3D model |
@@ -94,8 +109,8 @@ throwaway library.
 ## Roadmap
 
 1. Library core and import
-2. Desktop window, installer, automatic start of PartKit Sync (this release; code signing to follow)
-3. Supplier search (DigiKey, Mouser, Farnell), provider preferences, hunting
+2. Desktop window, installer, automatic start of PartKit Sync (code signing to follow)
+3. Supplier search (DigiKey, Mouser, Farnell), provider preferences, hunting (this release)
 4. Passive picker and more starter packs
 5. Library screen and full health check
 6. Version 1.0

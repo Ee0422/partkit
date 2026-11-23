@@ -1,7 +1,8 @@
 """PartKit desktop window (PySide6).
 
-Four screens over the same engine the command line uses:
-Library, Import, Health check and Settings, plus a one-screen first-run setup.
+Five screens over the same engine the command line uses:
+Find parts, Library, Import, Health check and Settings, plus a one-screen
+first-run setup.
 """
 
 from __future__ import annotations
@@ -55,8 +56,9 @@ def _set_rows(t: QTableWidget, rows: list[list[str]]) -> None:
 
 
 class Bridge(QObject):
-    """Carries messages from the Downloads watcher thread to the window."""
+    """Carries messages from background threads (Downloads watcher, searches) to the window."""
     message = Signal(str)
+    searched = Signal(object)
 
 
 # ---------------------------------------------------------------- first-run setup
@@ -115,11 +117,16 @@ class MainWindow(QMainWindow):
         self.lib = Library(self.real_root)
         self.bridge = Bridge()
         self.bridge.message.connect(self.log)
+        self.bridge.searched.connect(self.show_results)
         self.observer = None
+        self.offers = []
+        self.cad_list = []
+        self.cad_index = -1
 
         self.setWindowTitle(f"PartKit {__version__}")
         self.resize(1100, 700)
         self.tabs = QTabWidget()
+        self.tabs.addTab(self._search_tab(), "Find parts")
         self.tabs.addTab(self._library_tab(), "Library")
         self.tabs.addTab(self._import_tab(), "Import")
         self.tabs.addTab(self._health_tab(), "Health check")
@@ -161,6 +168,148 @@ class MainWindow(QMainWindow):
         self.log_box.append(msg)
         self.statusBar().showMessage(msg, 8000)
         self.refresh_library()
+
+    # ----- Find parts tab
+    def _search_tab(self) -> QWidget:
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        row = QHBoxLayout()
+        self.search_box = QLineEdit()
+        self.search_box.setPlaceholderText("Manufacturer part number, e.g. CL10B104KB8NNNC")
+        self.search_box.returnPressed.connect(self.run_search)
+        self.search_btn = QPushButton("Search")
+        self.search_btn.clicked.connect(self.run_search)
+        row.addWidget(self.search_box)
+        row.addWidget(self.search_btn)
+        lay.addLayout(row)
+        self.search_msg = QLabel("Searches your preferred suppliers in your order (Settings).")
+        self.search_msg.setWordWrap(True)
+        lay.addWidget(self.search_msg)
+        self.results = _table(["Supplier", "Supplier PN", "MPN", "Manufacturer", "Stock", "Price @1",
+                               "Status", "Description"])
+        lay.addWidget(self.results)
+        row = QHBoxLayout()
+        self.add_cat = QComboBox()
+        self.add_cat.addItems(["Let PartKit guess"] + list(F.CATEGORIES))
+        add = QPushButton("Add to library")
+        add.setToolTip("Fills Manufacturer, Description, Datasheet, supplier numbers and specs")
+        add.clicked.connect(self.add_result)
+        cad = QPushButton("Get CAD files")
+        cad.setToolTip("Opens your first preferred provider; your download is imported automatically")
+        cad.clicked.connect(lambda: self.get_cad(next_=False))
+        self.next_btn = QPushButton("Not there? Try next provider")
+        self.next_btn.clicked.connect(lambda: self.get_cad(next_=True))
+        self.next_btn.setEnabled(False)
+        page = QPushButton("Open supplier page")
+        page.clicked.connect(self.open_supplier_page)
+        for b in (QLabel("Category:"), self.add_cat, add, cad, self.next_btn, page):
+            row.addWidget(b)
+        row.addStretch()
+        lay.addLayout(row)
+        return w
+
+    def run_search(self):
+        mpn = self.search_box.text().strip()
+        if not mpn:
+            return
+        self.search_btn.setEnabled(False)
+        self.search_msg.setText(f"Searching for {mpn}…")
+        settings = self.lib.settings
+        import threading
+
+        from .search import find
+
+        def work():
+            try:
+                res = find(mpn, settings)
+            except Exception as e:  # noqa: BLE001 - never let a search crash the window
+                from .search import SearchResult
+
+                res = SearchResult(mpn=mpn, messages=[f"Search failed: {e}"])
+            self.bridge.searched.emit(res)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def show_results(self, res):
+        self.search_btn.setEnabled(True)
+        self.last_search = res
+        self.offers = res.exact or res.offers
+        rows = []
+        for o in self.offers:
+            price = o.unit_price(1)
+            rows.append([o.supplier, o.supplier_pn, o.mpn, o.manufacturer,
+                         "" if o.stock is None else f"{o.stock:,}",
+                         "" if price is None else f"{price:g} {o.currency}".strip(), o.status, o.description])
+        _set_rows(self.results, rows)
+        msgs = list(res.messages)
+        if self.offers:
+            msgs.insert(0, f"Found {len(self.offers)} offer(s) for {res.mpn}.")
+        self.search_msg.setText("\n".join(msgs) or f"No results for {res.mpn}.")
+        self.cad_list, self.cad_index = [], -1
+        self.next_btn.setEnabled(False)
+
+    def _search_mpn(self) -> str:
+        rows = sorted({i.row() for i in self.results.selectedIndexes()})
+        if rows:
+            return self.results.item(rows[0], 2).text()
+        if self.offers:
+            return self.offers[0].mpn
+        return self.search_box.text().strip()
+
+    def add_result(self):
+        from .search import add_from_search
+
+        res = getattr(self, "last_search", None)
+        if not res or not res.offers:
+            QMessageBox.information(self, "PartKit", "Search for a part first.")
+            return
+        mpn = self._search_mpn()
+        offers = [o for o in res.best() if o.mpn == mpn] or res.best()
+        cat = self.add_cat.currentText()
+        part = add_from_search(self.lib, mpn, offers, category=None if cat.startswith("Let") else cat)
+        self.log(f"{part.mpn} added to Review as {part.category}. Click 'Get CAD files' next.")
+
+    def get_cad(self, next_: bool):
+        from .providers import cad_sources, open_source
+
+        mpn = self._search_mpn()
+        if not mpn:
+            QMessageBox.information(self, "PartKit", "Search for a part first.")
+            return
+        if not next_ or not self.cad_list:
+            datasheet = next((o.datasheet for o in self.offers if o.mpn == mpn and o.datasheet), "")
+            self.cad_list = cad_sources(mpn, self.lib.settings, manufacturer_url=datasheet)
+            self.cad_index = -1
+        self.cad_index += 1
+        if self.cad_index >= len(self.cad_list):
+            hint = "" if self.lib.settings.hunting != "off" else \
+                " Turn on hunting in Settings to search wider."
+            QMessageBox.information(self, "PartKit", f"No more providers to try for {mpn}.{hint}")
+            self.next_btn.setEnabled(False)
+            return
+        src = self.cad_list[self.cad_index]
+        if not self.lib.get(mpn) and getattr(self, "last_search", None) and self.last_search.offers:
+            self.add_result()
+        if hasattr(self, "watch_box") and not self.watch_box.isChecked():
+            self.watch_box.setChecked(True)  # so the download imports by itself
+        open_source(src)
+        self.next_btn.setEnabled(self.cad_index + 1 < len(self.cad_list))
+        self.log(f"Opened {src.name}{' (hunting)' if src.hunting else ''} for {mpn}. Download the Altium "
+                 "files there; PartKit imports them from your Downloads folder.")
+
+    def open_supplier_page(self):
+        import webbrowser
+
+        from .suppliers import supplier_link
+
+        rows = sorted({i.row() for i in self.results.selectedIndexes()})
+        if rows and rows[0] < len(self.offers) and self.offers[rows[0]].url:
+            webbrowser.open(self.offers[rows[0]].url)
+            return
+        name = self.lib.settings.suppliers[0] if self.lib.settings.suppliers else "DigiKey"
+        mpn = self._search_mpn()
+        if mpn:
+            webbrowser.open(supplier_link(name, mpn))
 
     # ----- Library tab
     def _library_tab(self) -> QWidget:
@@ -236,7 +385,10 @@ class MainWindow(QMainWindow):
                 if QMessageBox.question(self, "PartKit", f"{m} is still in category Misc. Approve anyway?") \
                         != QMessageBox.Yes:
                     continue
-            self.lib.approve(m)
+            try:
+                self.lib.approve(m)
+            except KeyError as e:
+                QMessageBox.warning(self, "PartKit", str(e.args[0]))
         self.refresh_library()
 
     def set_category(self):
@@ -427,6 +579,33 @@ class MainWindow(QMainWindow):
         self.providers.setDragDropMode(QAbstractItemView.InternalMove)
         self.providers.setMaximumHeight(90)
         form.addRow("Model provider order (drag to reorder)", self.providers)
+        from . import credentials
+
+        self.key_fields = {}
+        for sup, needed in credentials.NEEDED.items():
+            row = QHBoxLayout()
+            for field in needed:
+                le = QLineEdit()
+                le.setEchoMode(QLineEdit.Password)
+                le.setPlaceholderText(field.replace("_", " "))
+                row.addWidget(le)
+                self.key_fields[(sup, field)] = le
+            link = QLabel(f'<a href="{credentials.SIGNUP[sup]}">Get a free key</a>')
+            link.setOpenExternalLinks(True)
+            row.addWidget(link)
+            form.addRow(f"{sup} API key", row)
+        keys_btn = QPushButton("Save API keys (stored in Windows Credential Manager)")
+        keys_btn.clicked.connect(self.save_keys)
+        form.addRow(keys_btn)
+        self.dk_site = QLineEdit()
+        self.dk_currency = QLineEdit()
+        self.farnell_store = QLineEdit()
+        region = QHBoxLayout()
+        for lbl, le in (("DigiKey site", self.dk_site), ("currency", self.dk_currency),
+                        ("Farnell store", self.farnell_store)):
+            region.addWidget(QLabel(lbl))
+            region.addWidget(le)
+        form.addRow("Region", region)
         self.targets = QTableWidget(len(F.CATEGORIES), 3)
         self.targets.setHorizontalHeaderLabels(["Category", "Symbol library (.SchLib)", "Footprint library (.PcbLib)"])
         self.targets.verticalHeader().setVisible(False)
@@ -448,6 +627,14 @@ class MainWindow(QMainWindow):
         self.suppliers.addItems(s.suppliers)
         self.providers.clear()
         self.providers.addItems(s.providers)
+        self.dk_site.setText(s.digikey_site)
+        self.dk_currency.setText(s.digikey_currency)
+        self.farnell_store.setText(s.farnell_store)
+        from . import credentials
+
+        for (sup, field), le in self.key_fields.items():
+            le.clear()
+            le.setPlaceholderText(("saved" if credentials.get(sup, field) else "not set") + f": {field.replace('_', ' ')}")
         for r, cat in enumerate(F.CATEGORIES):
             sch, pcb = s.target_libs(cat)
             item = QTableWidgetItem(cat)
@@ -464,6 +651,9 @@ class MainWindow(QMainWindow):
         s.skip_review = self.skip_review.isChecked()
         s.suppliers = [self.suppliers.item(i).text() for i in range(self.suppliers.count())]
         s.providers = [self.providers.item(i).text() for i in range(self.providers.count())]
+        s.digikey_site = self.dk_site.text().strip() or "US"
+        s.digikey_currency = self.dk_currency.text().strip() or "USD"
+        s.farnell_store = self.farnell_store.text().strip() or "uk.farnell.com"
         targets = {}
         for r, cat in enumerate(F.CATEGORIES):
             sch, pcb = self.targets.item(r, 1).text().strip(), self.targets.item(r, 2).text().strip()
@@ -472,6 +662,22 @@ class MainWindow(QMainWindow):
         s.targets = targets
         self.lib.save_settings()
         self.statusBar().showMessage("Settings saved.", 5000)
+
+    def save_keys(self):
+        from . import credentials
+
+        saved = []
+        try:
+            for (sup, field), le in self.key_fields.items():
+                if le.text().strip():
+                    credentials.set(sup, field, le.text().strip())
+                    saved.append(sup)
+        except RuntimeError as e:
+            QMessageBox.warning(self, "PartKit", str(e))
+            return
+        ready = [n for n in credentials.NEEDED if credentials.is_set_up(n)]
+        self.load_settings()
+        QMessageBox.information(self, "PartKit", "Ready to search: " + (", ".join(ready) or "none yet") + ".")
 
     # ----- Sync
     def sync(self):
