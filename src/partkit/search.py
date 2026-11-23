@@ -90,11 +90,14 @@ def find(mpn: str, settings: Settings, http: Http = default_http, clients: dict 
     return res
 
 
-def find_any(text: str, settings: Settings, http: Http = default_http) -> SearchResult:
-    """One box for everything: a value such as "1k 0603 1%", or a part number."""
+def find_any(text: str, settings: Settings, http: Http = default_http, query=None) -> SearchResult:
+    """One box for everything: a value such as "1k 0603 1%", or a part number.
+
+    query: a ValueQuery to use instead of reading the text (the search tab's filters).
+    """
     from . import valuesearch
 
-    q = valuesearch.parse(text)
+    q = query or valuesearch.parse(text)
     if q is None:
         return find(text, settings, http)
     res = SearchResult(mpn=text.strip(), query=q)
@@ -382,9 +385,9 @@ def apply_offers(part: Part, offers: list[Offer], overwrite: bool = False) -> li
 
 
 def add_from_search(lib: Library, mpn: str, offers: list[Offer], category: str | None = None) -> Part:
-    """Create (or update) a part from search results. It waits in Review until CAD files arrive."""
+    """Create (or update) a part from search results. It waits in To check until CAD files arrive."""
     best = offers[0].mpn if offers and offers[0].mpn else mpn
-    part = lib.get(best) or Part(mpn=best, stage="Review")
+    part = lib.get(best) or Part(mpn=best, stage="To check")
     if category:
         part.category = category
     apply_offers(part, offers)

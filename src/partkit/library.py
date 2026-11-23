@@ -33,7 +33,7 @@ def safe_name(mpn: str) -> str:
 class Part:
     mpn: str
     category: str = F.DEFAULT_CATEGORY
-    stage: str = "Review"
+    stage: str = F.TO_CHECK
     params: dict[str, str] = field(default_factory=dict)
     source: str = "unknown"            # SnapMagic, SamacSys, UltraLibrarian, PartKit, ...
     schlib: str = ""                   # path relative to library root
@@ -51,6 +51,9 @@ class Part:
     copied_from: str = ""              # MPN whose checked symbol/footprint this part reuses
     notes: list[str] = field(default_factory=list)
     updated: float = 0.0
+
+    def __post_init__(self):
+        self.stage = F.OLD_STAGE_NAMES.get(self.stage, self.stage)
 
     def bom_params(self) -> dict[str, str]:
         """Every parameter written onto the Altium symbol, standard names first."""
@@ -156,6 +159,50 @@ class Library:
             removed += 1
         return removed
 
+    def delete_part(self, mpn: str, from_altium: bool = False) -> Part:
+        """Take a part out of PartKit, its templates and its projects. `partkit undo` brings it back.
+
+        With from_altium, the next Send also removes its symbol from your main library
+        (the footprint stays: other parts may use it).
+        """
+        from . import kits, projects  # local import: they import this module
+
+        part = self._require(mpn)
+        path = self._part_path(part.mpn)
+        hist = self.root / "partkit-data" / "history" / f"{path.stem}.deleted.{time.time_ns()}.json"
+        shutil.move(str(path), hist)
+        for kit in kits.kits(self):
+            if any(it.mpn == part.mpn for it in kit.items):
+                kit.remove(part.mpn)
+                kits.save(self, kit)
+        for proj in projects.projects(self):
+            if proj.has(part.mpn):
+                proj.remove(part.mpn)
+                if part.mpn in proj.in_library:
+                    proj.in_library.remove(part.mpn)
+                projects.save(self, proj)
+        removals = [r for r in self.pending_removals() if r["mpn"] != part.mpn]
+        if from_altium and part.target_schlib:
+            removals.append({"mpn": part.mpn, "name": F.display_name(part.params, part.category) or part.mpn,
+                             "schlib": part.target_schlib, "pcblib": part.target_pcblib})
+        self._save_removals(removals)
+        return part
+
+    def _removals_path(self) -> Path:
+        return self.root / "partkit-data" / "sync" / "pending-removals.json"
+
+    def pending_removals(self) -> list[dict]:
+        """Deleted parts whose symbols the next Send takes out of your main library."""
+        try:
+            return json.loads(self._removals_path().read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return []
+
+    def _save_removals(self, removals: list[dict]) -> None:
+        path = self._removals_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(removals, indent=2, ensure_ascii=False), encoding="utf-8")
+
     def undo(self, mpn: str) -> Part | None:
         """Restore the previous saved version of a part. Returns it, or None."""
         stem = self._part_path(mpn).stem
@@ -165,6 +212,8 @@ class Library:
             return None
         last = hist[-1]
         os.replace(last, self._part_path(mpn))
+        if ".deleted." in last.name:  # undoing a delete: don't remove it from Altium after all
+            self._save_removals([r for r in self.pending_removals() if r["mpn"] != mpn])
         return self.get(mpn)
 
     def find_same_spec(self, part: Part) -> Part | None:
@@ -192,7 +241,7 @@ class Library:
         if not (part.symbol and part.footprint):
             raise KeyError(f"{mpn} has no symbol or footprint yet. Get its CAD files first "
                            "(Search > Get CAD files, or import a download).")
-        part.stage = "Released"
+        part.stage = F.READY
         part.needs_sync = True
         self.save(part)
         return part
@@ -242,24 +291,55 @@ class Library:
         return issues
 
     # ---------- sync job for Altium ----------
-    def write_sync_job(self) -> Path | None:
+    def pending_changes(self) -> list[Part]:
+        """Parts waiting for Send to Altium (main library)."""
+        return [p for p in self.parts() if p.needs_sync or (self.settings.skip_review and p.stage == F.TO_CHECK)]
+
+    def send_count(self) -> int:
+        """Everything the next Send does: main library changes, deletions and new project-library parts."""
+        from . import projects
+
+        return len(self.pending_changes()) + len(self.pending_removals()) + sum(
+            len(projects.missing_from_library(self, pr)[0]) for pr in projects.projects(self) if pr.own_library)
+
+    def write_sync_job(self, parts: list[Part] | None = None, dst: tuple[str, str] | None = None,
+                       kind: str = "main", prjpcb: str = "") -> Path | None:
         """Write the job PartKit Sync runs inside Altium. Returns its path, or None if nothing to do.
+
+        With no parts given this is Send: main library changes, deletions, and the parts
+        each project library doesn't have yet, all in one job.
 
         Plain 'KEY=VALUE' lines grouped in [PART]...[END] blocks, so the
         DelphiScript side can read it with a TStringList and no parser.
+        FOR= says where a block's result belongs; PartKit Sync echoes it back.
         """
-        pending = [p for p in self.parts() if p.needs_sync or (self.settings.skip_review and p.stage == "Review")]
-        if not pending:
+        entries = [(p, dst, kind, prjpcb) for p in (self.pending_changes() if parts is None else parts)]
+        removals = []
+        if parts is None:
+            from . import projects
+
+            removals = self.pending_removals()
+            for pr in projects.projects(self):
+                if pr.own_library:
+                    entries += [(p, (pr.schlib, pr.pcblib), f"project:{pr.name}", pr.prjpcb)
+                                for p in projects.missing_from_library(self, pr)[0]]
+        if not entries and not removals:
             return None
         lines = ["# PartKit sync job", f"LIBRARY_ROOT={self.root.resolve()}"]
-        for p in pending:
+        for r in removals:
+            lines += ["[PART]", "ACTION=REMOVE", "FOR=remove", f"MPN={_clean(r['mpn'])}",
+                      f"COMPONENT_NAME={_clean(r['name'])}", f"DST_SCHLIB={_clean(r['schlib'])}",
+                      f"DST_PCBLIB={_clean(r.get('pcblib', ''))}", "[END]"]
+        for p, d, for_, prj in entries:
             lines.append("[PART]")
-            stage = "Released" if self.settings.skip_review and p.stage == "Review" else p.stage
+            stage = F.READY if self.settings.skip_review and p.stage == F.TO_CHECK else p.stage
             for k, v in (
+                ("FOR", for_), ("PRJPCB", prj), ("INSTALL", "1" if for_ == "main" else "0"),
                 ("MPN", p.mpn), ("STAGE", stage), ("CATEGORY", p.category),
                 ("SRC_SCHLIB", p.schlib), ("SRC_SYMBOL", p.symbol),
                 ("SRC_PCBLIB", p.pcblib), ("SRC_FOOTPRINT", p.footprint),
-                ("DST_SCHLIB", p.target_schlib), ("DST_PCBLIB", p.target_pcblib),
+                ("DST_SCHLIB", d[0] if d else p.target_schlib),
+                ("DST_PCBLIB", d[1] if d else p.target_pcblib),
                 ("STEP", p.step), ("MODEL3D", p.model_3d_source),
                 ("BOX_MM", ",".join(f"{x:g}" for x in p.box_mm)),
                 ("COMPONENT_NAME", F.display_name(p.params, p.category) or p.mpn),
@@ -274,26 +354,58 @@ class Library:
                 lines.append(f"PARAM={_clean(k)}|{_clean(v)}")
             lines.append("[END]")
         path = self.root / "partkit-data" / "sync" / "pending-sync.txt"
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("\r\n".join(lines) + "\r\n", encoding="utf-8-sig")
+        # for older PartKit Sync scripts that don't echo FOR= back
+        (path.parent / "pending-kind.txt").write_text(kind, encoding="utf-8")
         _point_altium_at(path)
         return path
 
+    def sync_result_waiting(self) -> bool:
+        return (self.root / "partkit-data" / "sync" / "sync-result.txt").exists()
+
     def read_sync_result(self) -> list[str]:
-        """Apply the result file PartKit Sync writes ('OK=<mpn>' / 'FAIL=<mpn>|reason')."""
+        """Apply the result file PartKit Sync writes.
+
+        Lines are 'OK=<mpn>' or 'FAIL=<mpn>|reason', each after a 'FOR=<where>' line
+        (main, remove, or project:<name>) when the script is new enough to write it.
+        """
         path = self.root / "partkit-data" / "sync" / "sync-result.txt"
         if not path.exists():
             return []
         messages = []
+        kind_file = path.parent / "pending-kind.txt"
+        where = kind_file.read_text(encoding="utf-8").strip() if kind_file.exists() else "main"
+        written: dict[str, list[str]] = {}
+        removed: list[str] = []
         for line in path.read_text(encoding="utf-8-sig").splitlines():
-            if line.startswith("OK="):
-                part = self.get(line[3:].strip())
-                if part:
+            if line.startswith("FOR="):
+                where = line[4:].strip() or "main"
+            elif line.startswith("OK="):
+                mpn = line[3:].strip()
+                if where == "remove":
+                    removed.append(mpn)
+                    messages.append(f"{mpn}: removed from your library")
+                    continue
+                part = self.get(mpn)
+                if part and where == "main":
                     part.needs_sync = False
                     self.save(part)
+                if where.startswith("project:"):
+                    written.setdefault(where[len("project:"):], []).append(mpn)
+                    messages.append(f"{mpn}: written into project {where[len('project:'):]}")
+                elif part:
                     messages.append(f"{part.mpn}: synced")
             elif line.startswith("FAIL="):
                 mpn, _, why = line[5:].partition("|")
                 messages.append(f"{mpn.strip()}: failed ({why.strip()})")
+        if written:
+            from . import projects  # local import: projects imports this module
+
+            for name, mpns in written.items():
+                projects.record_written(self, name, mpns)
+        if removed:
+            self._save_removals([r for r in self.pending_removals() if r["mpn"] not in removed])
         path.rename(path.with_name(f"sync-result.{time.time_ns()}.txt"))
         return messages
 

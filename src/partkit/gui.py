@@ -11,11 +11,12 @@ import os
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QObject, Qt, Signal
+from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
     QFormLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget, QMainWindow, QMessageBox,
-    QPushButton, QTableWidget, QTableWidgetItem, QTabWidget, QTextEdit, QVBoxLayout, QWidget,
+    QMenu, QPushButton, QTableWidget, QTableWidgetItem, QTabWidget, QTextEdit, QToolButton, QVBoxLayout,
+    QWidget,
 )
 
 from . import __version__
@@ -67,6 +68,7 @@ class Bridge(QObject):
     """Carries messages from background threads (Downloads watcher, searches) to the window."""
     message = Signal(str)
     searched = Signal(object)
+    download = Signal(str)  # a finished CAD download, imported on the window's thread
 
 
 # ---------------------------------------------------------------- first-run setup
@@ -110,12 +112,22 @@ class SetupDialog(QDialog):
         return lib
 
 
+FIRST_STEPS = (
+    "Your library is ready. Three steps to your first part:\n\n"
+    "1. Find parts: search a part number, or a value like 1k 0603 1%. Pick one and click Get CAD files. "
+    "Download the Altium files there: the part appears in My parts by itself.\n\n"
+    "2. My parts: check the symbol and footprint, then click Mark Ready.\n\n"
+    "3. Click Send to Altium (top right). PartKit writes the part into your Altium libraries, "
+    "also while Altium is open.\n\n"
+    "Projects and templates are optional: use them when you start a board.")
+
+
 # ---------------------------------------------------------------- reuse a checked part
 
 class ReuseDialog(QDialog):
     """New value from a checked part, or a new part on its footprint."""
 
-    def __init__(self, parent, lib: Library, src, mode: str):
+    def __init__(self, parent, lib: Library, src, mode: str, preset=None):
         from .reuse import can_search_by_value
 
         super().__init__(parent)
@@ -146,9 +158,24 @@ class ReuseDialog(QDialog):
         self.msg = QLabel("")
         self.msg.setWordWrap(True)
         lay.addWidget(self.msg)
+        filters = QHBoxLayout()
+        self.jlc_type = QComboBox()
+        self.jlc_type.addItems(["Basic and Extended", "Basic only", "Extended only"])
+        self.only_stock = QCheckBox("In stock only")
+        self.only_stock.setChecked(True)
+        self.jlc_type.currentTextChanged.connect(self.show_rows)
+        self.only_stock.toggled.connect(self.show_rows)
+        for wdg in (QLabel("JLCPCB type:"), self.jlc_type, self.only_stock):
+            filters.addWidget(wdg)
+        filters.addStretch()
+        lay.addLayout(filters)
         self.table = _table(["MPN", "Value", "Size", "Tolerance", "Power / Voltage", "Dielectric", "JLCPCB type",
                              "Stock", "Price @1 (USD)", "Supplier PN"])
+        self.table.itemSelectionChanged.connect(self.show_choice)
         lay.addWidget(self.table)
+        self.choice = QLabel("Click the part you want in the list.")
+        self.choice.setWordWrap(True)
+        lay.addWidget(self.choice)
         form = QFormLayout()
         self.symbol_from = QComboBox()
         self.category = QComboBox()
@@ -169,6 +196,11 @@ class ReuseDialog(QDialog):
         buttons.rejected.connect(self.reject)
         lay.addWidget(buttons)
         self.resize(900, 500)
+        if preset is not None:  # the supplier part picked on Find parts
+            self.text.setText(preset.mpn)
+            self.rows = [preset]
+            self.show_rows()
+            self.table.selectRow(0)
 
     def query(self) -> str:
         from .reuse import value_query_text
@@ -194,34 +226,63 @@ class ReuseDialog(QDialog):
         self.show_rows()
         self.msg.setText("\n".join(res.messages) or (f"{len(self.rows)} found." if self.rows else "No results."))
 
-    def show_rows(self):
+    def _passes(self, r) -> bool:
+        kind = self.jlc_type.currentText()
+        if kind == "Basic only" and r.offer.status != "Basic":
+            return False
+        if kind == "Extended only" and r.offer.status not in ("Extended", "Preferred"):
+            return False
+        return not (self.only_stock.isChecked() and r.offer.stock is not None and r.offer.stock <= 0)
+
+    def show_rows(self, *_):
+        self.visible = [r for r in self.rows if self._passes(r)]
         table = []
-        for r in self.rows:
+        for r in self.visible:
             o = r.offer
             price = o.unit_price(1)
             table.append([r.mpn, r.value(), r.specs.get("Size", ""), r.specs.get("Tolerance", ""), r.rating(),
                           r.specs.get("Dielectric", ""), o.status if "JLCPCB" in r.sold_by else "",
                           "" if o.stock is None else f"{o.stock:,}", "" if price is None else f"{price:g}",
                           o.supplier_pn])
-        _set_rows(self.table, table, keep_order=True)
-        if table:
-            self.table.selectRow(0)
+        _set_rows(self.table, table, keep_order=True)  # nothing pre-picked: you choose
+        self.show_choice()
 
     def chosen(self):
         rows = sorted({i.row() for i in self.table.selectedIndexes()})
         if rows:
             idx = self.table.item(rows[0], 0).data(Qt.UserRole)
-            if idx is not None and idx < len(self.rows):
-                return self.rows[idx]
+            if idx is not None and idx < len(getattr(self, "visible", [])):
+                return self.visible[idx]
         return None
+
+    def show_choice(self):
+        r = self.chosen()
+        if r is None:
+            self.choice.setText("Click the part you want in the list." if self.rows else "")
+            return
+        o = r.offer
+        stock = "stock unknown" if o.stock is None else f"{o.stock:,} in stock"
+        kind = f", {o.status}" if o.status else ""
+        self.choice.setText(f"Creating {o.mpn} ({o.supplier_pn}{kind}, {stock}).")
 
     def create(self):
         from .reuse import ReuseProblem, new_from_footprint, new_value
         from .search import offers_for
 
+        from .reuse import package_warning
+
         row = self.chosen()
+        if row is None and self.by_value:
+            QMessageBox.information(self, "PartKit", "Search, then click the part you want in the list.")
+            return
         offers = offers_for(row, self.lib.settings.suppliers) if row else []
         typed = "" if self.by_value else self.text.text().strip()
+        warn = package_warning(self.src, row.offer if row else None)
+        if not row and typed:
+            warn = (f"{typed} will be added without supplier details (no supplier part number, stock or "
+                    "price). Search first to fill them in.")
+        if warn and QMessageBox.question(self, "PartKit", warn + "\n\nCreate it anyway?") != QMessageBox.Yes:
+            return
         try:
             if self.mode == "value":
                 self.created = new_value(self.lib, self.src.mpn, typed, offers)
@@ -236,6 +297,176 @@ class ReuseDialog(QDialog):
         self.accept()
 
 
+class LibraryPicker(QWidget):
+    """Choose where a project's own library is: an Altium project (.PrjPcb) or a folder.
+
+    Shows the exact .SchLib and .PcbLib the parts will go into before you press OK,
+    and asks which one when there are several.
+    """
+
+    def __init__(self, parent=None, name_box: QLineEdit | None = None, start: str = ""):
+        super().__init__(parent)
+        self.name_box = name_box
+        self.path, self.files = "", ("", "")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        row = QHBoxLayout()
+        self.line = QLineEdit(start)
+        self.line.setReadOnly(True)
+        self.line.setPlaceholderText("Empty: use my main library")
+        proj_btn = QPushButton("Altium project…")
+        proj_btn.setToolTip("Your board's .PrjPcb: PartKit uses the .SchLib/.PcbLib already in it")
+        proj_btn.clicked.connect(self._pick_project)
+        folder_btn = QPushButton("Folder…")
+        folder_btn.setToolTip("A folder: its Altium project, or the .SchLib/.PcbLib in it.\n"
+                              "If there are none, PartKit makes new ones there.")
+        folder_btn.clicked.connect(self._pick_folder)
+        clear = QPushButton("Clear")
+        clear.clicked.connect(self.clear)
+        for wdg in (self.line, proj_btn, folder_btn, clear):
+            row.addWidget(wdg)
+        lay.addLayout(row)
+        self.result = QLabel("")
+        self.result.setWordWrap(True)
+        lay.addWidget(self.result)
+        if name_box is not None:
+            name_box.textChanged.connect(self._show)
+
+    def _pick_project(self):
+        f, _ = QFileDialog.getOpenFileName(self, "Your board's Altium project", self.path,
+                                           "Altium project (*.PrjPcb)")
+        if f:
+            self.set_path(f)
+
+    def _pick_folder(self):
+        d = QFileDialog.getExistingDirectory(self, "Folder of your board's library", self.path)
+        if d:
+            self.set_path(d)
+
+    def clear(self):
+        self.path, self.files = "", ("", "")
+        self.line.clear()
+        self._show()
+
+    def set_path(self, path: str) -> bool:
+        """Use this project or folder, asking which library when there are several. False if cancelled."""
+        from PySide6.QtWidgets import QInputDialog
+
+        from . import projects
+
+        schs, pcbs = projects.library_choices(path)
+        chosen = []
+        for kind, found in (("SchLib", schs), ("PcbLib", pcbs)):
+            if len(found) <= 1:
+                chosen.append(found[0] if found else "")
+                continue
+            names = [Path(f).name if [Path(x).name for x in found].count(Path(f).name) == 1 else f for f in found]
+            name, ok = QInputDialog.getItem(self, "PartKit", f"There are {len(found)} .{kind} files. "
+                                            "Which one is this board's?", names, 0, False)
+            if not ok:
+                return False
+            chosen.append(found[names.index(name)])
+        self.path, self.files = str(path), tuple(chosen)
+        self.line.setText(str(path))
+        if self.name_box is not None and not self.name_box.text().strip():
+            self.name_box.setText(Path(path).stem if Path(path).suffix else Path(path).name)
+        self._show()
+        return True
+
+    def _show(self, *_):
+        from . import projects
+
+        if not self.path:
+            self.result.setText("Parts go into your main library only.")
+            return
+        name = self.name_box.text().strip() if self.name_box is not None else ""
+        try:
+            sch, pcb = projects.planned_libraries(self.path, name, *self.files)
+        except ValueError as e:
+            self.result.setText(str(e))
+            return
+        lines = [f"{Path(x).name}{'' if Path(x).exists() else ' (new, PartKit makes it)'}" for x in (sch, pcb)]
+        self.result.setText("Parts also go into:\n  " + "\n  ".join(lines) + f"\nin {Path(sch).parent}")
+        self.result.setToolTip(f"{sch}\n{pcb}")
+
+
+class LibraryDialog(QDialog):
+    """Change where an existing project's own library is."""
+
+    def __init__(self, parent, name: str, start: str = ""):
+        super().__init__(parent)
+        self.setWindowTitle(f"Library for '{name}'")
+        lay = QVBoxLayout(self)
+        box = QLineEdit(name)
+        self.picker = LibraryPicker(self, box, start)
+        lay.addWidget(QLabel("Choose your board's Altium project, or a folder:"))
+        lay.addWidget(self.picker)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        lay.addWidget(buttons)
+        self.picker._show()
+
+
+class NewProjectDialog(QDialog):
+    def __init__(self, parent, templates: list[str], projects: list[str]):
+        super().__init__(parent)
+        self.setWindowTitle("New project")
+        form = QFormLayout(self)
+        self.name = QLineEdit()
+        self.name.setPlaceholderText("e.g. Motor driver v2")
+        form.addRow("Project name", self.name)
+        self.start = QComboBox()
+        self.start.addItems(["Empty", "From templates", "Copy of another project"])
+        form.addRow("Start", self.start)
+        self.tpl = QListWidget()
+        self.tpl.setSelectionMode(QAbstractItemView.MultiSelection)
+        self.tpl.addItems(templates)
+        self.tpl.setMaximumHeight(110)
+        form.addRow("Templates", self.tpl)
+        self.copy = QComboBox()
+        self.copy.addItems(projects)
+        form.addRow("Copy of", self.copy)
+        self.picker = LibraryPicker(self, self.name)
+        self.picker._show()
+        form.addRow("Own library (optional)", self.picker)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        form.addRow(buttons)
+        self.start.currentTextChanged.connect(self._mode)
+        self._mode()
+
+    def _mode(self, *_):
+        self.tpl.setEnabled(self.start.currentText() == "From templates")
+        self.copy.setEnabled(self.start.currentText().startswith("Copy") and self.copy.count() > 0)
+
+    def templates(self) -> list[str]:
+        if self.start.currentText() != "From templates":
+            return []
+        return [i.text() for i in self.tpl.selectedItems()]
+
+    def copy_of(self) -> str:
+        return self.copy.currentText() if self.start.currentText().startswith("Copy") else ""
+
+
+class AddToProjectDialog(QDialog):
+    def __init__(self, parent, projects: list[str], templates: list[str]):
+        super().__init__(parent)
+        self.setWindowTitle("Add to project")
+        form = QFormLayout(self)
+        self.project = QComboBox()
+        self.project.addItems(projects)
+        form.addRow("Project", self.project)
+        self.template = QComboBox()
+        self.template.addItems(["No, this project only"] + templates)
+        form.addRow("Also add to a template?", self.template)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        form.addRow(buttons)
+
+
 # ---------------------------------------------------------------- main window
 
 class MainWindow(QMainWindow):
@@ -247,6 +478,7 @@ class MainWindow(QMainWindow):
         self.bridge = Bridge()
         self.bridge.message.connect(self.log)
         self.bridge.searched.connect(self.show_results)
+        self.bridge.download.connect(self.handle_download)
         self.observer = None
         self.offers = []
         self.cad_list = []
@@ -256,11 +488,10 @@ class MainWindow(QMainWindow):
         self.resize(1100, 700)
         self.tabs = QTabWidget()
         self.tabs.addTab(self._search_tab(), "Find parts")
-        self.tabs.addTab(self._library_tab(), "Library")
-        self.tabs.addTab(self._kits_tab(), "Kits")
-        self.tabs.addTab(self._import_tab(), "Import")
-        self.tabs.addTab(self._health_tab(), "Health check")
+        self.tabs.addTab(self._library_tab(), "My parts")
+        self.tabs.addTab(self._projects_tab(), "Projects")
         self.tabs.addTab(self._settings_tab(), "Settings")
+        self._health_window()
 
         top = QHBoxLayout()
         self.mode_label = QLabel()
@@ -274,8 +505,17 @@ class MainWindow(QMainWindow):
         lay = QVBoxLayout(central)
         lay.addLayout(top)
         lay.addWidget(self.tabs)
+        self.log_box = QTextEdit()
+        self.log_box.setReadOnly(True)
+        self.log_box.setMaximumHeight(90)
+        self.log_box.setPlaceholderText("Messages from PartKit appear here.")
+        lay.addWidget(self.log_box)
         self.setCentralWidget(central)
         self.setAcceptDrops(True)
+        self.result_timer = QTimer(self)
+        self.result_timer.setInterval(2000)
+        self.result_timer.timeout.connect(self.check_sync_result)
+        self.result_timer.start()
         self.refresh_all()
 
     # ----- library switching (test mode)
@@ -316,7 +556,10 @@ class MainWindow(QMainWindow):
         row.addWidget(self.search_box)
         row.addWidget(self.search_btn)
         lay.addLayout(row)
-        self.search_msg = QLabel("Type a part number, or a resistor or capacitor value to see JLCPCB parts.")
+        self.search_msg = QLabel(FIRST_STEPS.split("\n\n", 1)[1].rsplit("\n\n", 1)[0]
+                                 if not self.lib.parts() else
+                                 "Type a part number, or a resistor or capacitor value (100nF, 10k). Or just "
+                                 "'capacitor 0805' to list them: filters for size, voltage and so on appear.")
         self.search_msg.setWordWrap(True)
         lay.addWidget(self.search_msg)
         filters = QHBoxLayout()
@@ -338,36 +581,151 @@ class MainWindow(QMainWindow):
         for wdg in (QLabel("JLCPCB type:"), self.jlc_type, self.only_stock, QLabel("Show:"), self.only_supplier, self.narrow):
             filters.addWidget(wdg)
         lay.addLayout(filters)
+        lay.addWidget(self._value_filters())
         self.results = _table(self.RESULT_COLUMNS)
         self.results.horizontalHeaderItem(6).setToolTip(self.jlc_type.toolTip())
         lay.addWidget(self.results)
         row = QHBoxLayout()
         self.add_cat = QComboBox()
         self.add_cat.addItems(["Let PartKit guess"] + list(F.CATEGORIES))
-        add = QPushButton("Add to library")
-        add.setToolTip("Fills Manufacturer, Description, Datasheet, supplier numbers and specs")
-        add.clicked.connect(self.add_result)
         cad = QPushButton("Get CAD files")
-        cad.setToolTip("Opens your first preferred provider; your download is imported automatically")
+        cad.setToolTip("Opens your first CAD provider. Download the Altium files there: the part appears in "
+                       "My parts with its symbol, footprint, 3D model and these supplier details.")
         cad.clicked.connect(self.get_cad_first)
         self.next_btn = QPushButton("Not there? Try next provider")
         self.next_btn.clicked.connect(self.get_cad_next)
         self.next_btn.setEnabled(False)
+        own = QPushButton("No CAD files? Use one of my footprints…")
+        own.setToolTip("Make this part on a footprint you've already checked (New part from this footprint)")
+        own.clicked.connect(self.use_my_footprint)
         page = QPushButton("Open supplier page")
         page.clicked.connect(self.open_supplier_page)
-        for b in (QLabel("Category:"), self.add_cat, add, cad, self.next_btn, page):
+        for b in (QLabel("Category:"), self.add_cat, cad, self.next_btn, own, page):
             row.addWidget(b)
         row.addStretch()
         lay.addLayout(row)
+        imp = QHBoxLayout()
+        self.watch_box = QCheckBox("Import CAD downloads from my Downloads folder automatically")
+        self.watch_box.toggled.connect(self.toggle_watch)
+        choose = QPushButton("Import a download…")
+        choose.setToolTip("A .zip, .IntLib or .step file. You can also drop files anywhere on this window.")
+        choose.clicked.connect(self.choose_zip)
+        imp.addWidget(self.watch_box)
+        imp.addWidget(choose)
+        imp.addStretch()
+        lay.addLayout(imp)
         self.rows = []
         return w
 
+    # ----- filters for resistor and capacitor value searches
+    def _value_filters(self) -> QWidget:
+        from . import valuesearch as V
+
+        box = QWidget()
+        row = QHBoxLayout(box)
+        row.setContentsMargins(0, 0, 0, 0)
+        self.f_size, self.f_volt, self.f_diel, self.f_tol, self.f_power = (QComboBox() for _ in range(5))
+        self.f_size.addItem("Any size", None)
+        for v in V.SIZES:
+            self.f_size.addItem(v, v)
+        self.f_volt.addItem("Any voltage", None)
+        for v in V.VOLTAGES:
+            self.f_volt.addItem(f"≥ {v:g} V", float(v))
+        self.f_diel.addItem("Any dielectric", None)
+        for v in V.DIELECTRICS:
+            self.f_diel.addItem(v, v)
+        self.f_power.addItem("Any power", None)
+        for v in V.POWERS:
+            self.f_power.addItem(f"≥ 1/{round(1 / v)} W" if v < 0.5 else f"≥ {v:g} W", v)
+        self.f_tol.setToolTip("Tolerance: this or tighter")
+        self.f_volt.setToolTip("Voltage rating: this or higher")
+        self.f_power.setToolTip("Power rating: this or higher")
+        self.f_diel.setToolTip("C0G (NP0): stable, small values. X7R: general use. X5R: big values, less stable.")
+        for c in (self.f_size, self.f_volt, self.f_diel, self.f_tol, self.f_power):
+            c.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+            c.activated.connect(self._value_filter_changed)
+        self.remember_btn = QPushButton("Remember as my usual")
+        self.remember_btn.setToolTip("Next time you type only a value, e.g. 100nF, these filters are filled in")
+        self.remember_btn.clicked.connect(self.remember_usual)
+        self.filter_label = QLabel("")
+        for wdg in (self.filter_label, self.f_size, self.f_volt, self.f_diel, self.f_tol, self.f_power,
+                    self.remember_btn):
+            row.addWidget(wdg)
+        row.addStretch()
+        self.value_filter_box = box
+        self.query = None
+        box.setVisible(False)
+        return box
+
+    def _show_query(self, q):
+        """Show the filters that fit this kind of part, set to what the query asks for."""
+        from . import valuesearch as V
+
+        self.query = q
+        self.value_filter_box.setVisible(q is not None)
+        if q is None:
+            return
+        cap = q.kind == "C"
+        self.filter_label.setText("Capacitor:" if cap else "Resistor:")
+        self.f_volt.setVisible(cap)
+        self.f_diel.setVisible(cap)
+        self.f_power.setVisible(not cap)
+        self.f_tol.clear()
+        self.f_tol.addItem("Any tolerance", None)
+        for t in V.TOLERANCES[q.kind]:
+            self.f_tol.addItem(f"±{t * 100:g}%", t)
+        for combo, value in ((self.f_size, q.package or None), (self.f_volt, q.voltage),
+                             (self.f_diel, q.dielectric or None), (self.f_tol, q.tolerance),
+                             (self.f_power, q.power)):
+            i = combo.findData(value)
+            if i < 0 and value is not None:  # typed something not in the list, e.g. 35V
+                combo.addItem(str(value), value)
+                i = combo.count() - 1
+            combo.setCurrentIndex(max(i, 0))
+
+    def _filters_from_combos(self) -> dict:
+        from . import valuesearch as V
+
+        combos = {"package": self.f_size, "voltage": self.f_volt, "dielectric": self.f_diel,
+                  "tolerance": self.f_tol, "power": self.f_power}
+        return {f: combos[f].currentData() for f in V.FILTER_FIELDS[self.query.kind]}
+
+    def _value_filter_changed(self, *_):
+        from . import valuesearch as V
+
+        if self.query is None:
+            return
+        self._start_search(self.search_box.text().strip(), V.with_filters(self.query, self._filters_from_combos()))
+
+    def remember_usual(self):
+        from . import valuesearch as V
+
+        if self.query is None:
+            return
+        f = self._filters_from_combos()
+        self.lib.settings.set_usual(self.query.kind, V.encode_filters(f))
+        self.lib.save_settings()
+        what = "capacitors" if self.query.kind == "C" else "resistors"
+        shown = ", ".join(c.currentText() for c in (self.f_size, self.f_volt, self.f_diel, self.f_tol, self.f_power)
+                          if c.isVisible() and c.currentData() is not None) or "no filters"
+        self.log(f"Your usual {what}: {shown}. Type only a value, e.g. "
+                 f"{'100nF' if self.query.kind == 'C' else '10k'}, and these are filled in.")
+
     def run_search(self):
+        from . import valuesearch as V
+
         text = self.search_box.text().strip()
         if not text:
             return
+        q = V.parse(text)
+        if q is not None:
+            q = V.with_filters(q, V.decode_filters(self.lib.settings.usual(q.kind)), only_unset=True)
+        self._start_search(text, q)
+
+    def _start_search(self, text: str, q):
+        self._show_query(q)
         self.search_btn.setEnabled(False)
-        self.search_msg.setText(f"Searching for {text}…")
+        self.search_msg.setText(f"Searching for {q.describe() if q else text}…")
         settings = self.lib.settings
         import threading
 
@@ -375,7 +733,7 @@ class MainWindow(QMainWindow):
 
         def work():
             try:
-                res = find_any(text, settings)
+                res = find_any(text, settings, query=q)
             except Exception as e:  # noqa: BLE001 - never let a search crash the window
                 from .search import SearchResult
 
@@ -465,22 +823,6 @@ class MainWindow(QMainWindow):
 
         return "" if parse(text) else text
 
-    def add_result(self):
-        from .search import add_from_search, offers_for
-
-        r = self._selected_row()
-        if r is None and getattr(self, "last_search", None) is not None and self.last_search.query is None:
-            r = (getattr(self, "visible", []) or [None])[0]
-        mpn = r.mpn if r else self._search_mpn()
-        if not mpn:
-            QMessageBox.information(self, "PartKit", "Pick a part in the results first.")
-            return
-        # without supplier results the part is added with just its MPN; the CAD file fills in the rest
-        offers = offers_for(r, self.lib.settings.suppliers) if r else []
-        cat = self.add_cat.currentText()
-        part = add_from_search(self.lib, mpn, offers, category=None if cat.startswith("Let") else cat)
-        self.log(f"{part.mpn} added to Review as {part.category}. Click 'Get CAD files' next.")
-
     # bound methods, not lambdas: a lambda holding the window keeps it alive past Qt's shutdown
     def get_cad_first(self):
         self.get_cad(next_=False)
@@ -507,14 +849,51 @@ class MainWindow(QMainWindow):
             self.next_btn.setEnabled(False)
             return
         src = self.cad_list[self.cad_index]
-        if not self.lib.get(mpn):
-            self.add_result()
+        if not next_:
+            from . import waiting
+            from .search import offers_for
+
+            r = self._selected_row()
+            if r is None and getattr(self, "last_search", None) is not None and self.last_search.query is None:
+                r = next((x for x in getattr(self, "visible", []) if x.mpn == mpn), None)
+            cat = self.add_cat.currentText()
+            waiting.remember(self.lib, mpn, offers_for(r, self.lib.settings.suppliers) if r else [],
+                             "" if cat.startswith("Let") else cat)
         if hasattr(self, "watch_box") and not self.watch_box.isChecked():
             self.watch_box.setChecked(True)  # so the download imports by itself
         open_source(src)
         self.next_btn.setEnabled(self.cad_index + 1 < len(self.cad_list))
         self.log(f"Opened {src.name}{' (hunting)' if src.hunting else ''} for {mpn}. Download the Altium "
-                 "files there; PartKit imports them from your Downloads folder.")
+                 "files there: the part appears in My parts when the download arrives. Not there? "
+                 "Try next provider.")
+
+    def use_my_footprint(self):
+        """No provider has CAD files: make the part on a footprint you've already checked."""
+        from PySide6.QtWidgets import QInputDialog
+
+        from . import fields as Fl
+
+        r = self._selected_row()
+        if r is None:
+            QMessageBox.information(self, "PartKit", "Pick a part in the results first.")
+            return
+        ready = [p for p in self.lib.parts() if p.stage == Fl.READY and p.footprint and p.source != "PartKit"]
+        if not ready:
+            QMessageBox.information(self, "PartKit", "You don't have a checked (Ready) part with a footprint yet.")
+            return
+        size = r.specs.get("Size", "")
+        ready.sort(key=lambda p: (size not in (p.params.get("Size", "") + p.footprint), p.footprint))
+        labels = [f"{p.footprint}  (from {p.mpn}{', ' + p.params.get('Size') if p.params.get('Size') else ''})"
+                  for p in ready]
+        label, ok = QInputDialog.getItem(self, "PartKit", f"Which of your checked footprints fits {r.mpn}"
+                                         + (f" ({size})" if size else "") + "?", labels, 0, False)
+        if not ok:
+            return
+        src = ready[labels.index(label)]
+        d = ReuseDialog(self, self.lib, src, "footprint", preset=r)
+        if d.exec() == QDialog.Accepted and d.created:
+            self.log(f"{d.created.mpn} added to My parts on the footprint of {src.mpn}, To check. Mark it Ready, "
+                     "then Send to Altium.")
 
     def open_supplier_page(self):
         import webbrowser
@@ -558,33 +937,72 @@ class MainWindow(QMainWindow):
         lay.addWidget(self.parts_table)
 
         actions = QHBoxLayout()
-        self.cat_choice = QComboBox()
-        self.cat_choice.addItems(list(F.CATEGORIES))
-        for text, fn in (("Approve", self.approve), ("Set category", self.set_category),
-                         ("Attach 3D model…", self.attach_3d), ("Mark obsolete", self.obsolete),
-                         ("Undo last change", self.undo), ("Details", self.show_details)):
-            b = QPushButton(text)
-            b.clicked.connect(fn)
-            if text == "Set category":
-                actions.addWidget(self.cat_choice)
-            actions.addWidget(b)
+        ready = QPushButton("Mark Ready ✓")
+        ready.setToolTip("You've checked the symbol and footprint: the part can go into your libraries")
+        ready.clicked.connect(self.approve)
+        to_proj = QPushButton("Add to project…")
+        to_proj.setToolTip("Add the selected parts to one project's parts list")
+        to_proj.clicked.connect(self.add_to_project)
+        more = QToolButton()
+        more.setText("More ▾")
+        more.setPopupMode(QToolButton.InstantPopup)
+        more.setMenu(self._part_menu())
+        self.problems_btn = QPushButton("")
+        self.problems_btn.setFlat(True)
+        self.problems_btn.setStyleSheet("color: #c05000;")
+        self.problems_btn.setToolTip("BOM gaps, missing files, simple 3D models")
+        self.problems_btn.clicked.connect(self.show_problems)
+        for wdg in (ready, to_proj, more):
+            actions.addWidget(wdg)
         actions.addStretch()
+        actions.addWidget(self.problems_btn)
         lay.addLayout(actions)
-        reuse = QHBoxLayout()
+        self.parts_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.parts_table.customContextMenuRequested.connect(self._part_context_menu)
+        return w
+
+    def _part_menu(self) -> QMenu:
+        """Everything you can do with a part, besides the three main buttons. Also the right-click menu."""
+        m = QMenu(self)
         for text, tip, fn in (
+                ("Mark Ready ✓", "", self.approve),
+                ("Add to project…", "", self.add_to_project),
+                (None, None, None),
                 ("★ Favourite on/off", "Favourites are listed first", self.toggle_favourite),
                 ("New value from this part…", "Same symbol, footprint and 3D model; only the value, part "
                  "number and supplier change. No download.", self.new_value),
                 ("New part from this footprint…", "Same footprint and 3D model; the symbol comes from any "
-                 "part you choose, or you add one later.", self.new_from_footprint),
-                ("Add to kit…", "Group parts you use together, e.g. 'USB-C power input'", self.add_to_kit)):
-            b = QPushButton(text)
-            b.setToolTip(tip)
-            b.clicked.connect(fn)
-            reuse.addWidget(b)
-        reuse.addStretch()
-        lay.addLayout(reuse)
-        return w
+                 "part you choose.", self.new_from_footprint),
+                ("Add to template…", "Templates are groups of parts you start projects from, e.g. "
+                 "'USB-C power input'", self.add_to_kit),
+                (None, None, None),
+                ("Attach 3D model…", "", self.attach_3d),
+                ("Re-import from Archive…", "Import a download again without downloading it", self.reimport),
+                ("Mark obsolete", "Keep it for old boards, but don't use it in new ones", self.obsolete),
+                ("Delete…", "Take it out of PartKit (Undo brings it back)", self.delete_parts),
+                (None, None, None),
+                ("Undo last change", "", self.undo),
+                ("Details", "", self.show_details)):
+            if text is None:
+                m.addSeparator()
+                continue
+            a = m.addAction(text)
+            a.setToolTip(tip)
+            a.triggered.connect(fn)
+        cats = m.addMenu("Set category")
+        for c in F.CATEGORIES:
+            a = cats.addAction(c)
+            a.setData(c)
+        cats.triggered.connect(self._category_chosen)
+        m.setToolTipsVisible(True)
+        return m
+
+    def _part_context_menu(self, pos):
+        if self.parts_table.itemAt(pos) is not None:
+            self._part_menu().exec(self.parts_table.viewport().mapToGlobal(pos))
+
+    def _category_chosen(self, action):
+        self.set_category(action.data())
 
     def refresh_library(self):
         if not hasattr(self, "parts_table"):
@@ -606,6 +1024,15 @@ class MainWindow(QMainWindow):
             rows.append([p.mpn, "★" if p.favourite else "", p.category, p.stage, p.params.get("Value", ""),
                          p.params.get("Size", ""), p.model_3d, p.footprint, Path(p.target_schlib).stem])
         _set_rows(self.parts_table, rows, keep_order=True)
+        n = self.lib.send_count()
+        if hasattr(self, "sync_btn"):
+            self.sync_btn.setText(f"Send to Altium ({n})" if n else "Send to Altium")
+            self.sync_btn.setToolTip(f"{n} change{'s' if n != 1 else ''} waiting: new or changed parts, deleted "
+                                     "parts and new project-library parts" if n else "Nothing waiting")
+        if hasattr(self, "problems_btn"):
+            k = len(self.lib.health_check())
+            self.problems_btn.setText(f"⚠ {k} problem{'s' if k != 1 else ''}")
+            self.problems_btn.setVisible(k > 0)
 
     def selected_mpns(self) -> list[str]:
         rows = sorted({i.row() for i in self.parts_table.selectedIndexes()})
@@ -621,7 +1048,7 @@ class MainWindow(QMainWindow):
         for m in self._need_selection():
             p = self.lib.get(m)
             if p and p.category == F.DEFAULT_CATEGORY and p.source != "PartKit":
-                if QMessageBox.question(self, "PartKit", f"{m} is still in category Misc. Approve anyway?") \
+                if QMessageBox.question(self, "PartKit", f"{m} is still in category Misc. Mark it Ready anyway?") \
                         != QMessageBox.Yes:
                     continue
             try:
@@ -630,14 +1057,31 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "PartKit", str(e.args[0]))
         self.refresh_library()
 
-    def set_category(self):
-        cat = self.cat_choice.currentText()
+    def set_category(self, cat: str):
         for m in self._need_selection():
             p = self.lib.get(m)
             p.category = cat
             p.target_schlib, p.target_pcblib = self.lib.settings.target_libs(cat)
             self.lib.save(p)
         self.refresh_library()
+
+    def delete_parts(self):
+        mpns = self._need_selection()
+        if not mpns:
+            return
+        box = QMessageBox(self)
+        box.setWindowTitle("PartKit")
+        box.setText(f"Delete {', '.join(mpns)}?\n\nIt's taken out of PartKit and your templates and projects. "
+                    "Undo last change brings it back.")
+        also = QCheckBox("Also remove it from my Altium library on the next Send (the footprint stays)")
+        box.setCheckBox(also)
+        box.setStandardButtons(QMessageBox.Yes | QMessageBox.Cancel)
+        if box.exec() != QMessageBox.Yes:
+            return
+        for m in mpns:
+            self.lib.delete_part(m, from_altium=also.isChecked())
+            self.log(f"Deleted {m}." + (" Send to Altium removes it there too." if also.isChecked() else ""))
+        self.refresh_all()
 
     def attach_3d(self):
         mpns = self._need_selection()
@@ -691,7 +1135,7 @@ class MainWindow(QMainWindow):
             return
         d = ReuseDialog(self, self.lib, src, mode)
         if d.exec() == QDialog.Accepted and d.created:
-            self.log(f"{d.created.mpn} added to Review ({d.created.notes[-1].lower()}). Approve it, then "
+            self.log(f"{d.created.mpn} added to My parts, To check ({d.created.notes[-1].lower()}). Mark it Ready, then "
                      "Send to Altium.")
 
     def add_to_kit(self):
@@ -703,12 +1147,12 @@ class MainWindow(QMainWindow):
         if not mpns:
             return
         names = [k.name for k in kits.kits(self.lib)]
-        name, ok = QInputDialog.getItem(self, "Add to kit", "Kit (pick one, or type a new name):", names,
+        name, ok = QInputDialog.getItem(self, "Add to template", "Template (pick one, or type a new name):", names,
                                         0, True)
         if ok and name.strip():
             kit = kits.add_parts(self.lib, name, mpns)
             self.refresh_kits()
-            self.log(f"Added {len(mpns)} part(s) to kit '{kit.name}' ({len(kit.items)} parts in it now).")
+            self.log(f"Added {len(mpns)} part(s) to template '{kit.name}' ({len(kit.items)} parts in it now).")
 
     def show_details(self):
         mpns = self.selected_mpns()
@@ -727,89 +1171,219 @@ class MainWindow(QMainWindow):
         d.resize(600, 500)
         d.exec()
 
-    # ----- Kits tab
-    def _kits_tab(self) -> QWidget:
+    # ----- Projects tab (projects, and templates to start them from)
+    def _projects_tab(self) -> QWidget:
         from PySide6.QtWidgets import QSpinBox
 
         w = QWidget()
         lay = QHBoxLayout(w)
         left = QVBoxLayout()
-        left.addWidget(QLabel("Kits (select one or more)"))
-        self.kit_list = QListWidget()
-        self.kit_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
-        self.kit_list.itemSelectionChanged.connect(self.show_kit)
-        left.addWidget(self.kit_list)
-        for text, fn in (("New kit…", self.new_kit), ("Delete kit", self.delete_kit)):
+        left.addWidget(QLabel("<b>Projects</b>"))
+        self.project_list = QListWidget()
+        self.project_list.itemSelectionChanged.connect(self._project_picked)
+        left.addWidget(self.project_list)
+        row = QHBoxLayout()
+        for text, fn in (("New project…", self.new_project), ("Delete", self.delete_project)):
             b = QPushButton(text)
             b.clicked.connect(fn)
-            left.addWidget(b)
+            row.addWidget(b)
+        left.addLayout(row)
+        tl = QLabel("<b>Templates</b> (optional)")
+        tl.setToolTip("Groups of parts you use together, e.g. 'USB-C power input'. Start a new project from one "
+                      "or more templates. Select several to see them combined.")
+        left.addWidget(tl)
+        self.kit_list = QListWidget()
+        self.kit_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.kit_list.itemSelectionChanged.connect(self._template_picked)
+        left.addWidget(self.kit_list)
+        row = QHBoxLayout()
+        for text, fn in (("New template…", self.new_kit), ("Delete", self.delete_kit)):
+            b = QPushButton(text)
+            b.clicked.connect(fn)
+            row.addWidget(b)
+        left.addLayout(row)
         lay.addLayout(left, 1)
+
         right = QVBoxLayout()
-        self.kit_title = QLabel("Add parts from the Library tab with 'Add to kit…'.")
+        self.kit_title = QLabel("")
         self.kit_title.setWordWrap(True)
         right.addWidget(self.kit_title)
-        self.kit_table = _table(["MPN", "Qty", "Value", "Description", "Supplier PN", "Note"])
+        self.kit_table = _table(["MPN", "Qty", "Value", "Description", "Supplier PN", "In project library", "Note"])
         right.addWidget(self.kit_table)
         row = QHBoxLayout()
         self.kit_qty = QSpinBox()
         self.kit_qty.setRange(1, 999)
         for wdg in (QLabel("Quantity:"), self.kit_qty):
             row.addWidget(wdg)
-        for text, fn in (("Set quantity", self.set_kit_qty), ("Remove from kit", self.remove_from_kit),
-                         ("Save parts list (CSV)…", self.save_kit_bom)):
+        for text, fn in (("Set quantity", self.set_kit_qty), ("Remove", self.remove_from_kit),
+                         ("Save starting parts list (CSV)…", self.save_kit_bom)):
             b = QPushButton(text)
             b.clicked.connect(fn)
             row.addWidget(b)
         row.addStretch()
         right.addLayout(row)
+        self.proj_lib_box = QWidget()
+        outer = QVBoxLayout(self.proj_lib_box)
+        outer.setContentsMargins(0, 0, 0, 0)
+        pl = QHBoxLayout()
+        info = QHBoxLayout()
+        outer.addLayout(pl)
+        outer.addLayout(info)
+        self.own_lib = QCheckBox("Give this project its own library")
+        self.own_lib.setToolTip("Off: the project uses your main library (simplest).\n"
+                                "On: PartKit writes this project's parts into its own .SchLib/.PcbLib too.")
+        self.own_lib.toggled.connect(self.toggle_own_library)
+        self.proj_folder = QLabel("")
+        folder_btn = QPushButton("Change library…")
+        folder_btn.setToolTip("Pick your board's Altium project or a folder; you see the exact .SchLib/.PcbLib "
+                              "before you press OK.")
+        folder_btn.clicked.connect(self.change_project_folder)
+        self.proj_status = QLabel("")
+        resend = QPushButton("Re-send all parts")
+        resend.setToolTip("Copies every part again, e.g. after you fixed a part in your main library.")
+        resend.clicked.connect(self.resend_project_library)
+        self.proj_lib_widgets = (self.proj_folder, folder_btn, self.proj_status, resend)
+        pl.addWidget(self.own_lib)
+        pl.addWidget(folder_btn)
+        pl.addWidget(resend)
+        pl.addStretch()
+        info.addWidget(self.proj_folder)
+        info.addWidget(self.proj_status, 1)
+        right.addWidget(self.proj_lib_box)
         lay.addLayout(right, 3)
         self.kit_lines = []
+        self.view = ("none", [])
         return w
 
     def refresh_kits(self):
         if not hasattr(self, "kit_list"):
             return
-        from . import kits
+        from . import kits, projects
 
-        chosen = {i.text() for i in self.kit_list.selectedItems()}
-        self.kit_list.blockSignals(True)
-        self.kit_list.clear()
-        for k in kits.kits(self.lib):
-            self.kit_list.addItem(k.name)
-            if k.name in chosen:
-                self.kit_list.item(self.kit_list.count() - 1).setSelected(True)
-        self.kit_list.blockSignals(False)
+        for widget, names in ((self.project_list, [p.name for p in projects.projects(self.lib)]),
+                              (self.kit_list, [k.name for k in kits.kits(self.lib)])):
+            chosen = {i.text() for i in widget.selectedItems()}
+            widget.blockSignals(True)
+            widget.clear()
+            for n in names:
+                widget.addItem(n)
+                if n in chosen:
+                    widget.item(widget.count() - 1).setSelected(True)
+            widget.blockSignals(False)
+        self.show_kit()
+
+    def _project_picked(self):
+        if self.project_list.selectedItems():
+            self.kit_list.blockSignals(True)
+            self.kit_list.clearSelection()
+            self.kit_list.blockSignals(False)
+        self.show_kit()
+
+    def _template_picked(self):
+        if self.kit_list.selectedItems():
+            self.project_list.blockSignals(True)
+            self.project_list.clearSelection()
+            self.project_list.blockSignals(False)
         self.show_kit()
 
     def _chosen_kits(self) -> list[str]:
         return [i.text() for i in self.kit_list.selectedItems()]
 
-    def show_kit(self):
-        from . import kits
+    def _chosen_project(self):
+        from . import projects
 
+        items = self.project_list.selectedItems() if hasattr(self, "project_list") else []
+        return projects.get(self.lib, items[0].text()) if items else None
+
+    def show_kit(self):
+        from . import kits, projects
+
+        proj = self._chosen_project()
         names = self._chosen_kits()
-        self.kit_lines = kits.project_bom(self.lib, names) if names else []
+        if proj:
+            self.view = ("project", [proj.name])
+            self.kit_lines = projects.parts_list(self.lib, proj)
+        elif names:
+            self.view = ("templates", names)
+            self.kit_lines = kits.project_bom(self.lib, names)
+        else:
+            self.view = ("none", [])
+            self.kit_lines = []
         rows = []
         for line in self.kit_lines:
             p = line.part
+            in_lib = ("yes" if proj and line.mpn in proj.in_library else "not yet") if proj and proj.own_library else ""
             rows.append([line.mpn, str(line.qty), p.params.get("Value", "") if p else "",
                          p.params.get("Description", "") if p else "",
-                         p.params.get("Supplier Part Number 1", "") if p else "", line.warning])
+                         p.params.get("Supplier Part Number 1", "") if p else "", in_lib, line.warning])
         _set_rows(self.kit_table, rows, keep_order=True)
-        if len(names) > 1:
-            self.kit_title.setText(f"Parts list for a project using: {', '.join(names)} "
-                                   f"({len(rows)} parts). Quantities are added up.")
+        self.proj_lib_box.setVisible(proj is not None)
+        if proj:
+            self.own_lib.blockSignals(True)
+            self.own_lib.setChecked(proj.own_library)
+            self.own_lib.blockSignals(False)
+            for wdg in self.proj_lib_widgets:
+                wdg.setVisible(proj.own_library)
+            ready, waiting = projects.missing_from_library(self.lib, proj)
+            changed = projects.changed_since_written(self.lib, proj)
+            bits = []
+            if ready:
+                bits.append(f"{len(ready)} new part{'s go' if len(ready) != 1 else ' goes'} in on the next Send")
+            if waiting:
+                bits.append(f"{len(waiting)} wait{'s' if len(waiting) == 1 else ''} for Mark Ready")
+            if changed:
+                bits.append(f"{len(changed)} changed since: Re-send all parts to update")
+            self.proj_status.setText(". ".join(bits) if bits else "Up to date")
+            self.proj_status.setToolTip("\n".join(waiting + [f"{m}: changed in PartKit since" for m in changed]))
+            sch, pcb = Path(proj.schlib), Path(proj.pcblib)
+            new = [p.name for p in (sch, pcb) if not p.exists()]
+            self.proj_folder.setText(f"Library: {sch.name} + {pcb.name}" + (" (new)" if new else "") + ".")
+            self.proj_folder.setToolTip(f"{sch}\n{pcb}" + (f"\nPartKit makes {', '.join(new)} on the first Send."
+                                                            if new else ""))
+            self.kit_title.setText(f"Project '{proj.name}': {len(rows)} parts. Add more from My parts with "
+                                   "'Add to project…'.")
+        elif len(names) > 1:
+            self.kit_title.setText(f"Templates {', '.join(names)} combined: {len(rows)} parts, quantities added up.")
         elif names:
-            self.kit_title.setText(f"Kit '{names[0]}': {len(rows)} parts.")
+            self.kit_title.setText(f"Template '{names[0]}': {len(rows)} parts.")
         else:
-            self.kit_title.setText("Select a kit, or several to see one combined parts list for a new project.")
+            self.kit_title.setText("Make a project for each board. Start it empty or from templates, then add "
+                                   "parts from My parts with 'Add to project…'.")
+
+    def new_project(self):
+        from . import kits, projects
+
+        d = NewProjectDialog(self, [k.name for k in kits.kits(self.lib)],
+                             [p.name for p in projects.projects(self.lib)])
+        if d.exec() != QDialog.Accepted:
+            return
+        try:
+            proj = projects.create(self.lib, d.name.text(), templates=d.templates(), copy_of=d.copy_of(),
+                                   folder=d.picker.path, schlib=d.picker.files[0], pcblib=d.picker.files[1])
+        except (ValueError, KeyError) as e:
+            QMessageBox.information(self, "PartKit", str(e.args[0]))
+            return
+        self.refresh_kits()
+        items = self.project_list.findItems(proj.name, Qt.MatchExactly)
+        if items:
+            items[0].setSelected(True)
+        self.log(f"Project '{proj.name}' made with {len(proj.items)} parts.")
+
+    def delete_project(self):
+        from . import projects
+
+        proj = self._chosen_project()
+        if proj and QMessageBox.question(self, "PartKit", f"Delete project '{proj.name}'? Its parts stay in your "
+                                         "library, and its library files are not deleted.") == QMessageBox.Yes:
+            projects.delete(self.lib, proj.name)
+            self.refresh_kits()
 
     def new_kit(self):
         from PySide6.QtWidgets import QInputDialog
 
         from . import kits
 
-        name, ok = QInputDialog.getText(self, "New kit", "Kit name, e.g. USB-C power input:")
+        name, ok = QInputDialog.getText(self, "New template", "Template name, e.g. USB-C power input:")
         if ok and name.strip():
             if kits.get(self.lib, name) is None:
                 kits.save(self.lib, kits.Kit(name.strip()))
@@ -819,7 +1393,7 @@ class MainWindow(QMainWindow):
         from . import kits
 
         for name in self._chosen_kits():
-            if QMessageBox.question(self, "PartKit", f"Delete kit '{name}'? The parts stay in your library.") \
+            if QMessageBox.question(self, "PartKit", f"Delete template '{name}'? The parts stay in your library.") \
                     == QMessageBox.Yes:
                 kits.delete(self.lib, name)
         self.refresh_kits()
@@ -828,77 +1402,122 @@ class MainWindow(QMainWindow):
         rows = sorted({i.row() for i in self.kit_table.selectedIndexes()})
         return [self.kit_table.item(r, 0).text() for r in rows]
 
-    def _single_kit(self):
-        from . import kits
+    def _change_list(self, change):
+        """Apply change(obj) to the selected project, or to the one selected template."""
+        from . import kits, projects
 
-        names = self._chosen_kits()
-        if len(names) != 1:
-            QMessageBox.information(self, "PartKit", "Select one kit to change it.")
-            return None
-        return kits.get(self.lib, names[0])
+        proj = self._chosen_project()
+        if proj:
+            change(proj)
+            projects.save(self.lib, proj)
+        else:
+            names = self._chosen_kits()
+            if len(names) != 1:
+                QMessageBox.information(self, "PartKit", "Select one project or one template to change it.")
+                return
+            kit = kits.get(self.lib, names[0])
+            change(kit)
+            kits.save(self.lib, kit)
+        self.show_kit()
 
     def set_kit_qty(self):
-        from . import kits
-
-        kit = self._single_kit()
-        if kit:
-            for m in self._kit_rows():
-                kit.add(m, self.kit_qty.value())
-            kits.save(self.lib, kit)
-            self.show_kit()
+        mpns, qty = self._kit_rows(), self.kit_qty.value()
+        self._change_list(lambda obj: [obj.add(m, qty) for m in mpns])
 
     def remove_from_kit(self):
-        from . import kits
-
-        kit = self._single_kit()
-        if kit:
-            for m in self._kit_rows():
-                kit.remove(m)
-            kits.save(self.lib, kit)
-            self.show_kit()
+        mpns = self._kit_rows()
+        self._change_list(lambda obj: [obj.remove(m) for m in mpns])
 
     def save_kit_bom(self, path: str | None = None):
         from . import kits
 
-        names = self._chosen_kits()
-        if not names:
-            QMessageBox.information(self, "PartKit", "Select one or more kits first.")
+        kind, names = self.view
+        if kind == "none":
+            QMessageBox.information(self, "PartKit", "Select a project or templates first.")
             return
         if not path:
-            default = str(Path.home() / "Documents" / (" + ".join(names) + " parts.csv"))
-            path, _ = QFileDialog.getSaveFileName(self, "Save parts list", default, "CSV (*.csv)")
+            default = str(Path.home() / "Documents" / (" + ".join(names) + " starting parts list.csv"))
+            path, _ = QFileDialog.getSaveFileName(self, "Save starting parts list", default, "CSV (*.csv)")
         if path:
-            kits.write_csv(kits.project_bom(self.lib, names), Path(path))
-            self.log(f"Parts list saved to {path}. It opens in Excel.")
+            kits.write_csv(self.kit_lines, Path(path))
+            self.log(f"Starting parts list saved to {path}. It opens in Excel. (Your real BOM comes from Altium "
+                     "once the schematic is done.)")
 
-    # ----- Import tab
-    def _import_tab(self) -> QWidget:
-        w = QWidget()
-        lay = QVBoxLayout(w)
-        drop = QLabel("Drop CAD downloads (SnapMagic, SamacSys, Ultra Librarian, manufacturer):\n"
-                      ".zip, .IntLib or .step files, anywhere on this window")
-        drop.setAlignment(Qt.AlignCenter)
-        drop.setMinimumHeight(120)
-        drop.setStyleSheet("border: 2px dashed #888; border-radius: 8px; font-size: 14px;")
-        lay.addWidget(drop)
-        row = QHBoxLayout()
-        choose = QPushButton("Choose file…")
-        choose.clicked.connect(self.choose_zip)
-        archive = QPushButton("Re-import from Archive…")
-        archive.clicked.connect(self.reimport)
-        self.watch_box = QCheckBox("Watch my Downloads folder and import CAD downloads automatically")
-        self.watch_box.toggled.connect(self.toggle_watch)
-        row.addWidget(choose)
-        row.addWidget(archive)
-        row.addWidget(self.watch_box)
-        row.addStretch()
-        lay.addLayout(row)
-        lay.addWidget(QLabel("Messages"))
-        self.log_box = QTextEdit()
-        self.log_box.setReadOnly(True)
-        lay.addWidget(self.log_box)
-        return w
+    def toggle_own_library(self, on: bool):
+        from . import projects
 
+        proj = self._chosen_project()
+        if proj:
+            proj.own_library = on
+            projects.save(self.lib, proj)
+            self.show_kit()
+
+    def change_project_folder(self):
+        from . import projects
+
+        proj = self._chosen_project()
+        if not proj:
+            return
+        d = LibraryDialog(self, proj.name, proj.prjpcb or (proj.folder if proj.own_library else ""))
+        if d.exec() != QDialog.Accepted or not d.picker.path:
+            return
+        try:
+            projects.use_file(proj, d.picker.path, *d.picker.files)
+        except ValueError as e:
+            QMessageBox.information(self, "PartKit", str(e))
+            return
+        projects.save(self.lib, proj)
+        self.refresh_library()
+        self.show_kit()
+        self.log(f"Project '{proj.name}' now uses {proj.schlib} and {proj.pcblib}.")
+
+    def update_project_library(self, everything: bool = False):
+        """Write the project's parts into its library now (Send does the new ones anyway)."""
+        from . import projects
+
+        proj = self._chosen_project()
+        if not proj:
+            return
+        self.check_sync_result()
+        proj = projects.get(self.lib, proj.name)
+        job, waiting = projects.write_update_job(self.lib, proj, everything=everything)
+        for w in waiting:
+            self.log(w)
+        if not job:
+            QMessageBox.information(self, "PartKit", f"The library for '{proj.name}' already has every Ready part."
+                                    + (f"\n\nNot sent yet:\n" + "\n".join(waiting) if waiting else ""))
+            return
+        started, msg = start_sync(copy_scripts())
+        if started:
+            self.log(msg)
+        else:
+            QMessageBox.information(self, "PartKit", msg)
+        self.show_kit()
+
+    def resend_project_library(self):
+        self.update_project_library(everything=True)
+
+    def add_to_project(self):
+        from . import kits, projects
+
+        mpns = self._need_selection()
+        if not mpns:
+            return
+        names = [p.name for p in projects.projects(self.lib)]
+        if not names:
+            QMessageBox.information(self, "PartKit", "Make a project first, on the Projects tab.")
+            return
+        d = AddToProjectDialog(self, names, [k.name for k in kits.kits(self.lib)])
+        if d.exec() != QDialog.Accepted:
+            return
+        also = d.template.currentText()
+        proj = projects.add_parts(self.lib, d.project.currentText(), mpns,
+                                  also_template="" if also.startswith("No") else also)
+        self.refresh_kits()
+        self.log(f"Added {len(mpns)} part(s) to project '{proj.name}'."
+                 + (" Send to Altium writes them into its library." if proj.own_library else ""))
+
+    # ----- Import
     def import_path(self, path: Path):
         try:
             if path.suffix.lower() in STEP_EXT:
@@ -908,11 +1527,25 @@ class MainWindow(QMainWindow):
                     return
                 res = attach_step(self.lib, mpns[0], path)
             else:
-                res = import_zip(self.lib, path)
+                from .watcher import import_download
+
+                res = import_download(self.lib, path, confirm=self.confirm_same_part)
             for m in res.messages:
                 self.log(m)
         except ImportProblem as e:
             self.log(f"{path.name}: {e}")
+
+    def handle_download(self, path: str):
+        from .watcher import handle_file
+
+        handle_file(self.lib, Path(path), self.log, confirm=self.confirm_same_part)
+        self.refresh_library()
+
+    def confirm_same_part(self, in_file: str, expected: str) -> bool:
+        return QMessageBox.question(
+            self, "PartKit", f"This download says {in_file}.\n\nIs it the {expected} you clicked Get CAD files "
+            f"for?\n\nYes: it becomes {expected}, with the supplier details from your search.\n"
+            f"No: it's added on its own as {in_file}.") == QMessageBox.Yes
 
     def choose_zip(self):
         files, _ = QFileDialog.getOpenFileNames(self, "Choose CAD downloads", str(Path.home() / "Downloads"),
@@ -930,7 +1563,7 @@ class MainWindow(QMainWindow):
         if on:
             from watchdog.observers import Observer
             from watchdog.events import FileSystemEventHandler
-            from .watcher import handle_file, wait_until_complete
+            from .watcher import wait_until_complete
 
             win = self
 
@@ -938,7 +1571,7 @@ class MainWindow(QMainWindow):
                 def _go(self, p):
                     path = Path(p)
                     if path.suffix.lower() in DOWNLOAD_EXT and wait_until_complete(path):
-                        handle_file(win.lib, path, win.bridge.message.emit)
+                        win.bridge.download.emit(str(path))  # import on the window's thread, so it can ask
 
                 def on_created(self, e):
                     if not e.is_directory:
@@ -971,26 +1604,31 @@ class MainWindow(QMainWindow):
         for url in e.mimeData().urls():
             self.import_path(Path(url.toLocalFile()))
 
-    # ----- Health tab
-    def _health_tab(self) -> QWidget:
-        w = QWidget()
-        lay = QVBoxLayout(w)
-        b = QPushButton("Run health check")
-        b.clicked.connect(self.run_check)
+    # ----- Problems (health check), opened from My parts
+    def _health_window(self):
+        self.health_dialog = QDialog(self)
+        self.health_dialog.setWindowTitle("Problems in your library")
+        lay = QVBoxLayout(self.health_dialog)
+        self.health_summary = QLabel("Finds missing BOM fields, missing files and 3D models that need replacing.")
+        lay.addWidget(self.health_summary)
+        self.health_table = _table(["MPN", "Problem", "Fix"])
+        lay.addWidget(self.health_table)
+        row = QHBoxLayout()
+        again = QPushButton("Check again")
+        again.clicked.connect(self.run_check)
         self.remove_starter_btn = QPushButton("Remove old starter parts")
         self.remove_starter_btn.setToolTip("Older PartKit versions added 381 passives with footprints nobody "
                                            "checked. This takes them out (copies are kept).")
         self.remove_starter_btn.clicked.connect(self.remove_starter)
-        self.health_summary = QLabel("Finds missing BOM fields, missing files and 3D models that need replacing.")
-        row = QHBoxLayout()
-        row.addWidget(b)
+        row.addWidget(again)
         row.addWidget(self.remove_starter_btn)
-        row.addWidget(self.health_summary)
         row.addStretch()
         lay.addLayout(row)
-        self.health_table = _table(["MPN", "Problem", "Fix"])
-        lay.addWidget(self.health_table)
-        return w
+        self.health_dialog.resize(800, 450)
+
+    def show_problems(self):
+        self.run_check()
+        self.health_dialog.show()
 
     def remove_starter(self):
         n = self.lib.remove_starter_parts()
@@ -1014,7 +1652,7 @@ class MainWindow(QMainWindow):
         self.hunting = QComboBox()
         self.hunting.addItems(list(HUNTING_MODES))
         form.addRow("Hunt beyond preferred providers", self.hunting)
-        self.skip_review = QCheckBox("Skip the Review stage (release parts straight away)")
+        self.skip_review = QCheckBox("Skip 'To check' (parts are Ready straight away)")
         form.addRow(self.skip_review)
         from .config import ALL_SUPPLIERS
 
@@ -1181,15 +1819,28 @@ class MainWindow(QMainWindow):
 
     # ----- Sync
     def sync(self):
-        for m in self.lib.read_sync_result():
-            self.log(m)
+        self.check_sync_result()
         job = self.lib.write_sync_job()
         if not job:
             QMessageBox.information(self, "PartKit", "Your Altium libraries are already up to date.")
             return
         started, msg = start_sync(copy_scripts())
-        QMessageBox.information(self, "PartKit", msg + "\n\nWhen Altium says it has finished, "
-                                "press Send to Altium again to record the result.")
+        if started:
+            self.log(msg)
+        else:
+            QMessageBox.information(self, "PartKit", msg)
+
+    def check_sync_result(self):
+        """Record PartKit Sync's result as soon as Altium writes it, so there's no second click."""
+        if not self.lib.sync_result_waiting():
+            return
+        messages = self.lib.read_sync_result()
+        for m in messages:
+            self.log_box.append(m)
+        failed = sum("failed" in m for m in messages)
+        self.log(f"Altium finished: {len(messages) - failed} done" + (f", {failed} failed (see above)." if failed
+                                                                       else "."))
+        self.refresh_all()
 
     def closeEvent(self, e):
         if self.observer:
@@ -1212,8 +1863,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         lib = dlg.run_setup()
         root = lib.root
-        QMessageBox.information(None, "PartKit", "Your library is ready. Start on 'Find parts': search for "
-                                "a part, add it, then get its CAD files.")
+        QMessageBox.information(None, "PartKit", FIRST_STEPS)
     win = MainWindow(root)
     win.show()
     return app.exec()

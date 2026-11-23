@@ -24,7 +24,7 @@ def test_embedded_3d_model(lib, fake_altium, tmp_path):
     res = import_zip(lib, z, category="Power")
     p = res.part
     assert res.provider == "SamacSys"
-    assert p.mpn == "TPS62130RGTR" and p.stage == "Review" and p.category == "Power"
+    assert p.mpn == "TPS62130RGTR" and p.stage == "To check" and p.category == "Power"
     assert p.model_3d == "Full" and p.model_3d_source == "embedded"
     assert p.params["Manufacturer"] == "Texas Instruments"
     assert (lib.root / p.schlib).exists() and (lib.root / p.pcblib).exists()
@@ -174,3 +174,36 @@ def test_vendor_import_of_starter_part_goes_to_category_library(tmp_path, lib, f
     part = import_zip(lib, z).part
     assert part.target_schlib == "Libraries/Resistors.SchLib"
     assert part.target_pcblib == "Libraries/Resistors.PcbLib"
+
+
+def test_download_joins_the_part_you_clicked_get_cad_files_for(lib, fake_altium, tmp_path):
+    from partkit import waiting
+    from partkit.suppliers import Offer
+    from partkit.watcher import import_download
+
+    offer = Offer("JLCPCB", "C21190", "0603WAF1001T5E", manufacturer="UNI-ROYAL", status="Basic",
+                  description="1kΩ ±1% 100mW 0603", category="Resistors", specs={"Resistance": "1kΩ"})
+    waiting.remember(lib, "0603WAF1001T5E", [offer])
+    # the provider's file says a slightly different number: you're asked, and say yes
+    z = make_zip(tmp_path / "LIB_0603WAF1001.zip", {"a.SchLib": b"SYM:R;MPN:0603WAF1001", "a.PcbLib": b"FP:R0603"})
+    asked = []
+    res = import_download(lib, z, confirm=lambda f, e: (asked.append((f, e)), True)[1])
+    p = lib.get("0603WAF1001T5E")
+    assert asked == [("0603WAF1001", "0603WAF1001T5E")] and p.params["Supplier Part Number 1"] == "C21190"
+    assert p.category == "Resistors" and p.target_schlib == "Libraries/Resistors.SchLib"
+    assert waiting.current(lib) is None and any("supplier details" in m for m in res.messages)
+
+
+def test_download_for_another_part_is_kept_apart(lib, fake_altium, tmp_path):
+    from partkit import waiting
+    from partkit.suppliers import Offer
+    from partkit.watcher import import_download
+
+    waiting.remember(lib, "LM358DR", [Offer("JLCPCB", "C7950", "LM358DR")])
+    z = make_zip(tmp_path / "NE555.zip", {"a.SchLib": b"SYM:U;MPN:NE555DR", "a.PcbLib": b"FP:SO8"})
+    res = import_download(lib, z)  # no one to ask (command line): kept apart, to be safe
+    assert lib.get("NE555DR") and lib.get("LM358DR") is None
+    assert waiting.current(lib)["mpn"] == "LM358DR" and "still waiting" in res.messages[-1]
+    z2 = make_zip(tmp_path / "x.zip", {"a.SchLib": b"SYM:U;MPN:lm358-dr", "a.PcbLib": b"FP:SO8"})
+    import_download(lib, z2)  # same number written differently: joined without asking
+    assert lib.get("LM358DR").params["Supplier Part Number 1"] == "C7950"

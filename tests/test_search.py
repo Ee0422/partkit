@@ -144,7 +144,7 @@ def test_apply_offers_fills_bom_and_guesses_category():
 def test_add_from_search_then_approve_needs_cad(lib):
     m = Mouser(http=FakeHttp({"mouser": MOUSER}), keys={"api_key": "k"}).search("x")[0]
     p = search.add_from_search(lib, "RC0603FR-071KL", [m])
-    assert p.stage == "Review" and p.target_schlib == "Libraries/Resistors.SchLib" and p.source == "search"
+    assert p.stage == "To check" and p.target_schlib == "Libraries/Resistors.SchLib" and p.source == "search"
     with pytest.raises(KeyError, match="no symbol or footprint"):
         lib.approve("RC0603FR-071KL")
 

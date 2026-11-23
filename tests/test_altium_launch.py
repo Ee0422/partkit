@@ -38,6 +38,7 @@ def test_start_sync_without_altium_explains(tmp_path, monkeypatch):
 def test_start_sync_uses_open_altium(tmp_path, monkeypatch):
     monkeypatch.setattr(A.os, "name", "nt")
     monkeypatch.setattr(A, "altium_running", lambda: True)
-    monkeypatch.setattr(A.subprocess, "Popen", lambda *a, **k: (_ for _ in ()).throw(AssertionError("started")))
-    started, msg = A.start_sync(prjscr=tmp_path / "PartKitSync.PrjScr")
-    assert not started and "already open" in msg and "File > Run Script" in msg
+    calls = []
+    monkeypatch.setattr(A.subprocess, "Popen", lambda cmd, **k: calls.append(cmd))
+    started, msg = A.start_sync(prjscr=tmp_path / "PartKitSync.PrjScr", x2=tmp_path / "X2.exe")
+    assert started and "open Altium" in msg and "RunScript" in calls[0]

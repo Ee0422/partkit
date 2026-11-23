@@ -13,8 +13,8 @@
     * installs the libraries in Altium so they appear in Components;
     * writes sync-result.txt so PartKit knows what succeeded.
 
-  Run: File > Run Script > PartKitSync.PrjScr > Run
-  (partkit sync starts it for you when Altium is closed.)
+  PartKit's Send starts it for you, also in an Altium that is already open.
+  By hand: File > Run Script > PartKitSync.PrjScr > Run.
 
   STATUS: tested in Altium Designer 26 with the starter pack. Copying
   vendor parts is newer; please report any error message.
@@ -26,6 +26,8 @@ var
   TouchedSch: TStringList;
   TouchedPcb: TStringList;
   Sources   : TStringList;  { downloaded libraries this run opened, closed again at the end }
+  NoInstall : TStringList;  { project libraries: written, but not installed for every project }
+  CurrentPrj: String;       { the Altium project the current part's library belongs to, if any }
 
 { ---------------- small helpers ---------------- }
 
@@ -110,6 +112,29 @@ begin
   if Doc <> nil then Doc.DoFileSave('');
 end;
 
+{ Altium puts a newly created document into the project that has the focus.
+  PartKit's libraries must not change your project, unless the library is that
+  project's own (CurrentPrj). Wrapped in try, so an older Altium just skips it. }
+procedure KeepOutOfProject(Path : String);
+var Ws : IWorkspace; Prj : IProject; I : Integer;
+begin
+  try
+    Ws := GetWorkspace;
+    if Ws = nil then Exit;
+    for I := 0 to Ws.DM_ProjectCount - 1 do
+    begin
+      Prj := Ws.DM_Projects(I);
+      if Prj = nil then Continue;
+      if (CurrentPrj <> '') and SameText(Prj.DM_ProjectFullPath, CurrentPrj) then Continue;
+      try
+        Prj.DM_RemoveSourceDocument(Path);
+      except
+      end;
+    end;
+  except
+  end;
+end;
+
 { ---------------- schematic library ---------------- }
 
 function OpenSchLib(Path : String) : ISch_Lib;
@@ -124,7 +149,11 @@ begin
     Doc := CreateNewDocumentFromDocumentKind('SCHLIB');
     if Doc = nil then Exit;
     Doc.DoSafeChangeFileNameAndSave(Path, 'SCHLIB');
-  end;
+    KeepOutOfProject(Path);
+    Remember(Sources, Path);
+  end
+  else
+    NoteSource(Path);  { not open before: close it again at the end, so it doesn't pile up in Altium }
   Doc := Client.OpenDocument('SCHLIB', Path);
   if Doc = nil then Exit;
   Client.ShowDocument(Doc);
@@ -373,7 +402,11 @@ begin
     Doc := CreateNewDocumentFromDocumentKind('PCBLIB');
     if Doc = nil then Exit;
     Doc.DoSafeChangeFileNameAndSave(Path, 'PCBLIB');
-  end;
+    KeepOutOfProject(Path);
+    Remember(Sources, Path);
+  end
+  else
+    NoteSource(Path);  { not open before: close it again at the end, so it doesn't pile up in Altium }
   Doc := Client.OpenDocument('PCBLIB', Path);
   if Doc = nil then Exit;
   Client.ShowDocument(Doc);
@@ -536,6 +569,21 @@ end;
 
 { ---------------- one part ---------------- }
 
+{ A part deleted in PartKit: take its symbol out of the library (the footprint stays,
+  other parts may use it). }
+function RemovePart(Block : TStringList) : String;
+var SchDst : ISch_Lib; Old : ISch_Component; DstSch : String;
+begin
+  Result := '';
+  DstSch := AbsPath(BlockValue(Block, 'DST_SCHLIB'));
+  if not FileExists(DstSch) then Exit;
+  SchDst := OpenSchLib(DstSch);
+  if SchDst = nil then begin Result := 'could not open ' + DstSch; Exit; end;
+  Old := FindSchComponent(SchDst, BlockValue(Block, 'COMPONENT_NAME'));
+  if Old <> nil then SchDst.RemoveSchComponent(Old);
+  Remember(TouchedSch, DstSch);
+end;
+
 function SyncPart(Block : TStringList) : String;
 var SchDst : ISch_Lib; PcbDst : IPCB_Library; Comp, Old : ISch_Component;
     Fp : IPCB_LibComponent; Name, FpName, Model, Box, DstSch, DstPcb, Kind : String;
@@ -617,6 +665,7 @@ begin
     Found := False;
     for J := 0 to IntegratedLibraryManager.InstalledLibraryCount - 1 do
       if SameText(IntegratedLibraryManager.InstalledLibraryPath(J), Path) then Found := True;
+    if NoInstall.IndexOf(Path) >= 0 then Found := True;
     if not Found then IntegratedLibraryManager.InstallLibrary(Path);
   end;
   All.Free;
@@ -636,6 +685,8 @@ begin
   TouchedSch := TStringList.Create;
   TouchedPcb := TStringList.Create;
   Sources := TStringList.Create;
+  NoInstall := TStringList.Create;
+  CurrentPrj := '';
   Block := TStringList.Create;
   Root := ExtractFileDir(ExtractFileDir(ExtractFileDir(JobPath)));
   Ok := 0; Failed := 0; InPart := False; InFp := False;
@@ -652,7 +703,15 @@ begin
       if InPart then
       begin
         Mpn := BlockValue(Block, 'MPN');
-        Err := SyncPart(Block);
+        CurrentPrj := BlockValue(Block, 'PRJPCB');
+        if BlockValue(Block, 'INSTALL') = '0' then
+        begin
+          Remember(NoInstall, AbsPath(BlockValue(Block, 'DST_SCHLIB')));
+          Remember(NoInstall, AbsPath(BlockValue(Block, 'DST_PCBLIB')));
+        end;
+        if BlockValue(Block, 'FOR') <> '' then Results.Add('FOR=' + BlockValue(Block, 'FOR'));
+        if BlockValue(Block, 'ACTION') = 'REMOVE' then Err := RemovePart(Block)
+        else Err := SyncPart(Block);
         if Err = '' then begin Results.Add('OK=' + Mpn); Inc(Ok); end
         else begin Results.Add('FAIL=' + Mpn + '|' + Err); Inc(Failed); end;
       end;
@@ -670,5 +729,5 @@ begin
   Results.SaveToFile(Root + '\partkit-data\sync\sync-result.txt');
   ShowMessage('PartKit Sync finished: ' + IntToStr(Ok) + ' parts updated, ' + IntToStr(Failed) +
               ' failed. Open PartKit to see the details.');
-  Lines.Free; Block.Free; Results.Free; TouchedSch.Free; TouchedPcb.Free; Sources.Free;
+  Lines.Free; Block.Free; Results.Free; TouchedSch.Free; TouchedPcb.Free; Sources.Free; NoInstall.Free;
 end;

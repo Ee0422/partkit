@@ -108,8 +108,8 @@ class BomLine:
             return "Not in the library any more"
         if self.part.stage == "Obsolete":
             return "Obsolete: pick a replacement"
-        if self.part.stage == "Review":
-            return "Still in Review: approve it before use"
+        if self.part.stage == "To check":
+            return "Still to check: click Ready before use"
         return ""
 
 
