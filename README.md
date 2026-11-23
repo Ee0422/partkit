@@ -33,6 +33,14 @@ project uses.
   PartKit lists the matching JLCPCB parts, Basic first, one row per part with
   value, size, tolerance, rating, dielectric, stock and price. Show Basic only
   or Extended only, in stock only, one supplier, or narrow by typing. No API key is needed.
+- **Reuses parts you've checked.** Check one 0603 resistor in Altium, then
+  **New value from this part** makes 4.7k, 22k and so on with the same symbol,
+  footprint and 3D model: type the value, pick a JLCPCB part, no download.
+  **New part from this footprint** does the same for a part nobody has CAD
+  files for, with the symbol copied from any part you choose.
+- **Favourites and kits.** Star the parts you use all the time. Group parts into
+  kits such as "USB-C power input", and start a new project from one or more
+  kits: PartKit shows the combined parts list and saves it as a CSV for Excel.
 - **Keeps the BOM clean.** Every part gets Manufacturer, Manufacturer Part
   Number, Description, Value, Supplier 1 and Supplier Part Number 1. Comment
   shows the value. A health check flags gaps before they reach a BOM.
@@ -83,6 +91,10 @@ partkit --help       # the command line
    with File > Run Script > PartKitSync.PrjScr (it stays in that list after the
    first time).
 5. **Check.** The Health check tab lists BOM gaps and missing or simple 3D models.
+6. **Reuse.** On the Library tab, select a Released part and click **New value
+   from this part** or **New part from this footprint**. **★ Favourite** and
+   **Add to kit** are there too; the *Kits* tab shows a kit, or several kits
+   together as one project parts list, and saves it as CSV.
 
 Use **Settings > Test mode** (or `partkit --test`) to try things on a
 throwaway library.
@@ -110,6 +122,11 @@ throwaway library.
 | `gui` | Open the window |
 | `set-target <category> <schlib> <pcblib>` | Choose the libraries a category goes into |
 | `set-hunting off/ask/always` | Hunt beyond your preferred providers only when they can't find a part |
+| `new-value <part> --value 4.7k` | New value with the same checked symbol, footprint and 3D (or `--mpn` for other parts) |
+| `new-from-footprint <part> <mpn> [--symbol-from <part>]` | New part on a checked footprint |
+| `favourite <mpn> [--off]` | Star a part |
+| `kit add/remove/list/delete` | Manage kits |
+| `kit bom <kit>... [--out file.csv]` | Parts list for a new project from kits |
 | `remove-starter` | Take out the unchecked starter passives older versions added |
 | `test-reset` | Reset the test library (with `--test`) |
 
@@ -117,11 +134,10 @@ throwaway library.
 
 1. Library core and import
 2. Desktop window, installer, automatic start of PartKit Sync (code signing to follow)
-3. Supplier search (JLCPCB and LCSC with no key, DigiKey, Mouser, Farnell), value search, hunting (this release)
-4. Reuse checked parts: "New value from this part" and "New part from this footprint"
-5. Favourites and kits, with a starting parts list per project
-6. Import your existing Altium libraries
-7. Version 1.0
+3. Supplier search (JLCPCB and LCSC with no key, DigiKey, Mouser, Farnell), value search, hunting
+4. Reuse checked parts, favourites and kits (this release)
+5. Import your existing Altium libraries
+6. Version 1.0
 
 ## Licence
 

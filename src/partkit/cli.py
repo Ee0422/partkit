@@ -341,6 +341,149 @@ def set_hunting(mode: str = typer.Argument(..., help="off, ask or always")):
     console.print(f"Hunting set to {mode}.")
 
 
+@app.command("new-value")
+def new_value_cmd(
+    source: str = typer.Argument(..., help="A checked (Released) part to copy, e.g. your 10k 0603"),
+    value: Optional[str] = typer.Option(None, "--value", help="New value for a resistor or capacitor, e.g. 4.7k"),
+    mpn: Optional[str] = typer.Option(None, "--mpn", help="Or the new part number, for any other part"),
+    pick: int = typer.Option(1, "--pick", help="Which search result to use (1 = the first, Basic first)"),
+):
+    """New part with the same checked symbol, footprint and 3D model. No download."""
+    from . import reuse
+    from .search import find, find_any, merge_rows, offers_for
+
+    lib = open_lib()
+    src = lib.get(source)
+    try:
+        reuse._check_source(src, source)
+    except reuse.ReuseProblem as e:
+        console.print(f"[red]{e}[/]")
+        raise typer.Exit(1)
+    if value and reuse.can_search_by_value(src):
+        res = find_any(reuse.value_query_text(src, value), lib.settings)
+    elif mpn:
+        res = find(mpn, lib.settings)
+    else:
+        console.print("[red]Give --value (resistors and capacitors) or --mpn.[/]")
+        raise typer.Exit(1)
+    for m in res.messages:
+        console.print(f"[yellow]{m}[/]")
+    rows = merge_rows(res.exact or res.offers, lib.settings.suppliers)
+    if rows:
+        console.print(_rows_table(rows[:10]))
+    if not rows and not mpn:
+        raise typer.Exit(1)
+    row = rows[min(pick, len(rows)) - 1] if rows else None
+    try:
+        part = reuse.new_value(lib, source, mpn or "", offers_for(row, lib.settings.suppliers) if row else [])
+    except reuse.ReuseProblem as e:
+        console.print(f"[red]{e}[/]")
+        raise typer.Exit(1)
+    console.print(f"{part.mpn} added to Review, copied from {source}. Next: [bold]partkit approve {part.mpn}[/]")
+
+
+@app.command("new-from-footprint")
+def new_from_footprint_cmd(
+    source: str = typer.Argument(..., help="A checked part whose footprint the new part shares"),
+    mpn: str = typer.Argument(..., help="The new part's manufacturer part number"),
+    symbol_from: Optional[str] = typer.Option(None, "--symbol-from", help="Copy the symbol from this part"),
+    category: Optional[str] = typer.Option(None, help="Leave out to keep the source part's category"),
+):
+    """New part on a checked footprint, e.g. an LDO nobody has CAD files for."""
+    from . import reuse
+    from .search import find
+
+    lib = open_lib()
+    _check_category(category)
+    res = find(mpn, lib.settings)
+    try:
+        part = reuse.new_from_footprint(lib, source, mpn, res.best() if res.exact else [],
+                                        symbol_from=symbol_from or "", category=category or "")
+    except reuse.ReuseProblem as e:
+        console.print(f"[red]{e}[/]")
+        raise typer.Exit(1)
+    console.print(f"{part.mpn} added to Review on the footprint of {source}. " + part.notes[0])
+
+
+@app.command()
+def favourite(mpn: str, off: bool = typer.Option(False, "--off", help="Take the star off")):
+    """Star a part you use often; favourites are listed first."""
+    open_lib().set_favourite(mpn, not off)
+    console.print(f"{mpn} {'is no longer a favourite' if off else 'is a favourite'}.")
+
+
+kit_app = typer.Typer(help="Kits: groups of parts you use together, e.g. 'USB-C power input'.")
+app.add_typer(kit_app, name="kit")
+
+
+@kit_app.command("list")
+def kit_list():
+    """Show your kits."""
+    from . import kits
+
+    for k in kits.kits(open_lib()):
+        console.print(f"[bold]{k.name}[/]: {len(k.items)} parts")
+
+
+@kit_app.command("add")
+def kit_add(name: str, mpns: list[str], qty: int = typer.Option(1, help="How many per board")):
+    """Add parts to a kit (made if it doesn't exist)."""
+    from . import kits
+
+    try:
+        kit = kits.add_parts(open_lib(), name, mpns, qty)
+    except KeyError as e:
+        console.print(f"[red]{e.args[0]}[/]")
+        raise typer.Exit(1)
+    console.print(f"Kit '{kit.name}' now has {len(kit.items)} parts.")
+
+
+@kit_app.command("remove")
+def kit_remove(name: str, mpns: list[str]):
+    """Take parts out of a kit."""
+    from . import kits
+
+    lib = open_lib()
+    kit = kits.get(lib, name)
+    if kit is None:
+        console.print(f"[red]No kit called {name!r}[/]")
+        raise typer.Exit(1)
+    for m in mpns:
+        kit.remove(m)
+    kits.save(lib, kit)
+
+
+@kit_app.command("delete")
+def kit_delete(name: str):
+    """Delete a kit. Its parts stay in your library."""
+    from . import kits
+
+    console.print("Deleted." if kits.delete(open_lib(), name) else f"[red]No kit called {name!r}[/]")
+
+
+@kit_app.command("bom")
+def kit_bom(names: list[str], out: Optional[Path] = typer.Option(None, "--out", help="Save as CSV (opens in Excel)")):
+    """Parts list for a new project from one or more kits."""
+    from . import kits
+
+    lib = open_lib()
+    try:
+        lines = kits.project_bom(lib, names)
+    except KeyError as e:
+        console.print(f"[red]{e.args[0]}[/]")
+        raise typer.Exit(1)
+    t = Table("Qty", "MPN", "Value", "Description", "Supplier PN", "Note")
+    for line in lines:
+        p = line.part
+        t.add_row(str(line.qty), line.mpn, p.params.get("Value", "") if p else "",
+                  p.params.get("Description", "") if p else "",
+                  p.params.get("Supplier Part Number 1", "") if p else "", line.warning)
+    console.print(t)
+    if out:
+        kits.write_csv(lines, out)
+        console.print(f"Saved to {out}")
+
+
 @app.command("remove-starter")
 def remove_starter():
     """Take out the unchecked starter passives that older PartKit versions added."""

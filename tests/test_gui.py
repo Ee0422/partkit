@@ -177,3 +177,49 @@ def test_remove_old_starter_parts_button(win):
     win.lib.save(Part(mpn="OLD1", category="Resistors", source="PartKit"))
     win.remove_starter()
     assert win.lib.get("OLD1") is None
+
+
+def test_new_value_dialog_and_favourites(win, monkeypatch):
+    from partkit import search
+    from partkit.search import SearchResult
+    from test_reuse_kits import J47, checked_10k
+
+    checked_10k(win.lib)
+    win.refresh_library()
+    seen = []
+    monkeypatch.setattr(search, "find_any", lambda q, s, http=None: (seen.append(q), SearchResult(mpn=q, offers=[J47]))[1])
+    win.parts_table.selectRow(0)
+    win.toggle_favourite()
+    assert win.lib.get("RC0603FR-0710KL").favourite and win.parts_table.item(0, 1).text() == "★"
+    d = gui.ReuseDialog(win, win.lib, win.lib.get("RC0603FR-0710KL"), "value")
+    d.text.setText("4.7k")
+    d.search()
+    assert seen == ["4.7k 0603 1%"] and d.table.rowCount() == 1
+    d.create()
+    assert d.created.mpn == "0603WAF4701T5E" and d.created.footprint == "RESC1608X55N"
+    win.fav_only.setChecked(True)
+    win.refresh_library()
+    assert win.parts_table.rowCount() == 1
+
+
+def test_kits_tab(win, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QInputDialog
+
+    from partkit import kits
+    from test_reuse_kits import checked_10k
+
+    checked_10k(win.lib)
+    win.refresh_library()
+    win.parts_table.selectRow(0)
+    monkeypatch.setattr(QInputDialog, "getItem", lambda *a, **k: ("Power input", True))
+    win.add_to_kit()
+    assert kits.get(win.lib, "Power input").items[0].mpn == "RC0603FR-0710KL"
+    win.kit_list.item(0).setSelected(True)
+    assert win.kit_table.rowCount() == 1
+    win.kit_table.selectRow(0)
+    win.kit_qty.setValue(4)
+    win.set_kit_qty()
+    assert win.kit_table.item(0, 1).text() == "4"
+    out = tmp_path / "p.csv"
+    win.save_kit_bom(str(out))
+    assert "RC0603FR-0710KL" in out.read_text(encoding="utf-8-sig")
