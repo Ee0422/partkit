@@ -47,6 +47,8 @@ class Part:
     target_schlib: str = ""
     target_pcblib: str = ""
     needs_sync: bool = False
+    favourite: bool = False            # starred: shown first when picking parts
+    copied_from: str = ""              # MPN whose checked symbol/footprint this part reuses
     notes: list[str] = field(default_factory=list)
     updated: float = 0.0
 
@@ -132,6 +134,12 @@ class Library:
         tmp = path.with_suffix(".tmp")
         tmp.write_text(json.dumps(asdict(part), indent=2, ensure_ascii=False), encoding="utf-8")
         os.replace(tmp, path)
+
+    def set_favourite(self, mpn: str, on: bool = True) -> Part:
+        part = self._require(mpn)
+        part.favourite = on
+        self.save(part)
+        return part
 
     def remove_starter_parts(self) -> int:
         """Take out the unchecked starter passives older PartKit versions added. Returns how many.

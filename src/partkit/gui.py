@@ -110,6 +110,132 @@ class SetupDialog(QDialog):
         return lib
 
 
+# ---------------------------------------------------------------- reuse a checked part
+
+class ReuseDialog(QDialog):
+    """New value from a checked part, or a new part on its footprint."""
+
+    def __init__(self, parent, lib: Library, src, mode: str):
+        from .reuse import can_search_by_value
+
+        super().__init__(parent)
+        self.lib, self.src, self.mode = lib, src, mode
+        self.created = None
+        self.rows = []
+        self.by_value = mode == "value" and can_search_by_value(src)
+        what = "New value from" if mode == "value" else "New part on the footprint of"
+        self.setWindowTitle(f"{what} {src.mpn}")
+        lay = QVBoxLayout(self)
+        copies = ("symbol, footprint and 3D model" if mode == "value" else "footprint and 3D model")
+        intro = QLabel(f"Copies the checked {copies} of {src.mpn} ({src.footprint}). "
+                       + ("Type the new value: PartKit adds the size and spec and lists JLCPCB parts."
+                          if self.by_value else "Type the new part's manufacturer part number and search, "
+                          "or just type it and press Create."))
+        intro.setWordWrap(True)
+        lay.addWidget(intro)
+        row = QHBoxLayout()
+        self.text = QLineEdit()
+        self.text.setPlaceholderText("e.g. 4.7k" if self.by_value and src.category == "Resistors" else
+                                     "e.g. 1uF" if self.by_value else "Manufacturer part number")
+        self.text.returnPressed.connect(self.search)
+        go = QPushButton("Search")
+        go.clicked.connect(self.search)
+        row.addWidget(self.text)
+        row.addWidget(go)
+        lay.addLayout(row)
+        self.msg = QLabel("")
+        self.msg.setWordWrap(True)
+        lay.addWidget(self.msg)
+        self.table = _table(["MPN", "Value", "Size", "Tolerance", "Power / Voltage", "Dielectric", "JLCPCB type",
+                             "Stock", "Price @1 (USD)", "Supplier PN"])
+        lay.addWidget(self.table)
+        form = QFormLayout()
+        self.symbol_from = QComboBox()
+        self.category = QComboBox()
+        if mode == "footprint":
+            self.symbol_from.addItem("None yet (I'll add one)")
+            for p in lib.parts():
+                if p.symbol and p.source != "PartKit" and p.mpn != src.mpn:
+                    self.symbol_from.addItem(p.mpn)
+            self.category.addItems(list(F.CATEGORIES))
+            self.category.setCurrentText(src.category)
+            form.addRow("Symbol from", self.symbol_from)
+            form.addRow("Category", self.category)
+        lay.addLayout(form)
+        buttons = QDialogButtonBox()
+        create = buttons.addButton("Create part", QDialogButtonBox.AcceptRole)
+        buttons.addButton(QDialogButtonBox.Cancel)
+        create.clicked.connect(self.create)
+        buttons.rejected.connect(self.reject)
+        lay.addWidget(buttons)
+        self.resize(900, 500)
+
+    def query(self) -> str:
+        from .reuse import value_query_text
+
+        t = self.text.text().strip()
+        return value_query_text(self.src, t) if self.by_value and t else t
+
+    def search(self):
+        from .search import SearchResult, find_any, merge_rows
+
+        q = self.query()
+        if not q:
+            return
+        self.msg.setText(f"Searching for {q}…")
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            res = find_any(q, self.lib.settings)
+        except Exception as e:  # noqa: BLE001 - never let a search crash the window
+            res = SearchResult(mpn=q, messages=[f"Search failed: {e}"])
+        finally:
+            QApplication.restoreOverrideCursor()
+        self.rows = merge_rows(res.exact or res.offers, self.lib.settings.suppliers)
+        self.show_rows()
+        self.msg.setText("\n".join(res.messages) or (f"{len(self.rows)} found." if self.rows else "No results."))
+
+    def show_rows(self):
+        table = []
+        for r in self.rows:
+            o = r.offer
+            price = o.unit_price(1)
+            table.append([r.mpn, r.value(), r.specs.get("Size", ""), r.specs.get("Tolerance", ""), r.rating(),
+                          r.specs.get("Dielectric", ""), o.status if "JLCPCB" in r.sold_by else "",
+                          "" if o.stock is None else f"{o.stock:,}", "" if price is None else f"{price:g}",
+                          o.supplier_pn])
+        _set_rows(self.table, table, keep_order=True)
+        if table:
+            self.table.selectRow(0)
+
+    def chosen(self):
+        rows = sorted({i.row() for i in self.table.selectedIndexes()})
+        if rows:
+            idx = self.table.item(rows[0], 0).data(Qt.UserRole)
+            if idx is not None and idx < len(self.rows):
+                return self.rows[idx]
+        return None
+
+    def create(self):
+        from .reuse import ReuseProblem, new_from_footprint, new_value
+        from .search import offers_for
+
+        row = self.chosen()
+        offers = offers_for(row, self.lib.settings.suppliers) if row else []
+        typed = "" if self.by_value else self.text.text().strip()
+        try:
+            if self.mode == "value":
+                self.created = new_value(self.lib, self.src.mpn, typed, offers)
+            else:
+                sym = self.symbol_from.currentText()
+                self.created = new_from_footprint(self.lib, self.src.mpn, typed, offers,
+                                                  symbol_from="" if sym.startswith("None") else sym,
+                                                  category=self.category.currentText())
+        except ReuseProblem as e:
+            QMessageBox.information(self, "PartKit", str(e))
+            return
+        self.accept()
+
+
 # ---------------------------------------------------------------- main window
 
 class MainWindow(QMainWindow):
@@ -131,6 +257,7 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.tabs.addTab(self._search_tab(), "Find parts")
         self.tabs.addTab(self._library_tab(), "Library")
+        self.tabs.addTab(self._kits_tab(), "Kits")
         self.tabs.addTab(self._import_tab(), "Import")
         self.tabs.addTab(self._health_tab(), "Health check")
         self.tabs.addTab(self._settings_tab(), "Settings")
@@ -165,6 +292,7 @@ class MainWindow(QMainWindow):
             ("TEST MODE: " if self.test_mode else "") + f"Library: {self.lib.root}")
         self.mode_label.setStyleSheet("color: #c05000; font-weight: bold;" if self.test_mode else "")
         self.refresh_library()
+        self.refresh_kits()
         self.load_settings()
 
     def log(self, msg: str):
@@ -416,12 +544,16 @@ class MainWindow(QMainWindow):
         self.cat_filter = QComboBox()
         self.cat_filter.addItems(["All categories", *F.CATEGORIES])
         self.cat_filter.currentIndexChanged.connect(self.refresh_library)
+        self.fav_only = QCheckBox("★ Favourites only")
+        self.fav_only.toggled.connect(self.refresh_library)
         filters.addWidget(self.search, 3)
         filters.addWidget(self.stage_filter, 1)
         filters.addWidget(self.cat_filter, 1)
+        filters.addWidget(self.fav_only)
         lay.addLayout(filters)
 
-        self.parts_table = _table(["MPN", "Category", "Stage", "Value", "3D", "Footprint", "Goes into"])
+        self.parts_table = _table(["MPN", "★", "Category", "Stage", "Value", "Size", "3D", "Footprint",
+                                   "Goes into"])
         self.parts_table.doubleClicked.connect(self.show_details)
         lay.addWidget(self.parts_table)
 
@@ -438,6 +570,20 @@ class MainWindow(QMainWindow):
             actions.addWidget(b)
         actions.addStretch()
         lay.addLayout(actions)
+        reuse = QHBoxLayout()
+        for text, tip, fn in (
+                ("★ Favourite on/off", "Favourites are listed first", self.toggle_favourite),
+                ("New value from this part…", "Same symbol, footprint and 3D model; only the value, part "
+                 "number and supplier change. No download.", self.new_value),
+                ("New part from this footprint…", "Same footprint and 3D model; the symbol comes from any "
+                 "part you choose, or you add one later.", self.new_from_footprint),
+                ("Add to kit…", "Group parts you use together, e.g. 'USB-C power input'", self.add_to_kit)):
+            b = QPushButton(text)
+            b.setToolTip(tip)
+            b.clicked.connect(fn)
+            reuse.addWidget(b)
+        reuse.addStretch()
+        lay.addLayout(reuse)
         return w
 
     def refresh_library(self):
@@ -447,7 +593,9 @@ class MainWindow(QMainWindow):
         stage = self.stage_filter.currentText()
         cat = self.cat_filter.currentText()
         rows = []
-        for p in self.lib.parts():
+        for p in sorted(self.lib.parts(), key=lambda p: (not p.favourite, p.category, p.mpn)):
+            if self.fav_only.isChecked() and not p.favourite:
+                continue
             if stage in F.STAGES and p.stage != stage:
                 continue
             if cat in F.CATEGORIES and p.category != cat:
@@ -455,9 +603,9 @@ class MainWindow(QMainWindow):
             hay = f"{p.mpn} {p.params.get('Value', '')} {p.footprint}".lower()
             if text and text not in hay:
                 continue
-            rows.append([p.mpn, p.category, p.stage, p.params.get("Value", ""), p.model_3d,
-                         p.footprint, Path(p.target_schlib).stem])
-        _set_rows(self.parts_table, rows)
+            rows.append([p.mpn, "★" if p.favourite else "", p.category, p.stage, p.params.get("Value", ""),
+                         p.params.get("Size", ""), p.model_3d, p.footprint, Path(p.target_schlib).stem])
+        _set_rows(self.parts_table, rows, keep_order=True)
 
     def selected_mpns(self) -> list[str]:
         rows = sorted({i.row() for i in self.parts_table.selectedIndexes()})
@@ -510,6 +658,58 @@ class MainWindow(QMainWindow):
         for m in self._need_selection():
             self.log(f"{m} restored." if self.lib.undo(m) else f"Nothing to undo for {m}.")
 
+    def toggle_favourite(self):
+        mpns = self._need_selection()
+        on = not all(self.lib.get(m).favourite for m in mpns)
+        for m in mpns:
+            self.lib.set_favourite(m, on)
+        self.refresh_library()
+
+    def _one_selected(self) -> str:
+        mpns = self._need_selection()
+        if len(mpns) > 1:
+            QMessageBox.information(self, "PartKit", "Select just one part to start from.")
+            return ""
+        return mpns[0] if mpns else ""
+
+    def new_value(self):
+        self._reuse("value")
+
+    def new_from_footprint(self):
+        self._reuse("footprint")
+
+    def _reuse(self, mode: str):
+        from .reuse import ReuseProblem, _check_source
+
+        mpn = self._one_selected()
+        if not mpn:
+            return
+        try:
+            src = _check_source(self.lib.get(mpn), mpn)
+        except ReuseProblem as e:
+            QMessageBox.information(self, "PartKit", str(e))
+            return
+        d = ReuseDialog(self, self.lib, src, mode)
+        if d.exec() == QDialog.Accepted and d.created:
+            self.log(f"{d.created.mpn} added to Review ({d.created.notes[-1].lower()}). Approve it, then "
+                     "Send to Altium.")
+
+    def add_to_kit(self):
+        from PySide6.QtWidgets import QInputDialog
+
+        from . import kits
+
+        mpns = self._need_selection()
+        if not mpns:
+            return
+        names = [k.name for k in kits.kits(self.lib)]
+        name, ok = QInputDialog.getItem(self, "Add to kit", "Kit (pick one, or type a new name):", names,
+                                        0, True)
+        if ok and name.strip():
+            kit = kits.add_parts(self.lib, name, mpns)
+            self.refresh_kits()
+            self.log(f"Added {len(mpns)} part(s) to kit '{kit.name}' ({len(kit.items)} parts in it now).")
+
     def show_details(self):
         mpns = self.selected_mpns()
         if not mpns:
@@ -526,6 +726,150 @@ class MainWindow(QMainWindow):
         lay.addWidget(QLabel("\n".join(info)))
         d.resize(600, 500)
         d.exec()
+
+    # ----- Kits tab
+    def _kits_tab(self) -> QWidget:
+        from PySide6.QtWidgets import QSpinBox
+
+        w = QWidget()
+        lay = QHBoxLayout(w)
+        left = QVBoxLayout()
+        left.addWidget(QLabel("Kits (select one or more)"))
+        self.kit_list = QListWidget()
+        self.kit_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.kit_list.itemSelectionChanged.connect(self.show_kit)
+        left.addWidget(self.kit_list)
+        for text, fn in (("New kit…", self.new_kit), ("Delete kit", self.delete_kit)):
+            b = QPushButton(text)
+            b.clicked.connect(fn)
+            left.addWidget(b)
+        lay.addLayout(left, 1)
+        right = QVBoxLayout()
+        self.kit_title = QLabel("Add parts from the Library tab with 'Add to kit…'.")
+        self.kit_title.setWordWrap(True)
+        right.addWidget(self.kit_title)
+        self.kit_table = _table(["MPN", "Qty", "Value", "Description", "Supplier PN", "Note"])
+        right.addWidget(self.kit_table)
+        row = QHBoxLayout()
+        self.kit_qty = QSpinBox()
+        self.kit_qty.setRange(1, 999)
+        for wdg in (QLabel("Quantity:"), self.kit_qty):
+            row.addWidget(wdg)
+        for text, fn in (("Set quantity", self.set_kit_qty), ("Remove from kit", self.remove_from_kit),
+                         ("Save parts list (CSV)…", self.save_kit_bom)):
+            b = QPushButton(text)
+            b.clicked.connect(fn)
+            row.addWidget(b)
+        row.addStretch()
+        right.addLayout(row)
+        lay.addLayout(right, 3)
+        self.kit_lines = []
+        return w
+
+    def refresh_kits(self):
+        if not hasattr(self, "kit_list"):
+            return
+        from . import kits
+
+        chosen = {i.text() for i in self.kit_list.selectedItems()}
+        self.kit_list.blockSignals(True)
+        self.kit_list.clear()
+        for k in kits.kits(self.lib):
+            self.kit_list.addItem(k.name)
+            if k.name in chosen:
+                self.kit_list.item(self.kit_list.count() - 1).setSelected(True)
+        self.kit_list.blockSignals(False)
+        self.show_kit()
+
+    def _chosen_kits(self) -> list[str]:
+        return [i.text() for i in self.kit_list.selectedItems()]
+
+    def show_kit(self):
+        from . import kits
+
+        names = self._chosen_kits()
+        self.kit_lines = kits.project_bom(self.lib, names) if names else []
+        rows = []
+        for line in self.kit_lines:
+            p = line.part
+            rows.append([line.mpn, str(line.qty), p.params.get("Value", "") if p else "",
+                         p.params.get("Description", "") if p else "",
+                         p.params.get("Supplier Part Number 1", "") if p else "", line.warning])
+        _set_rows(self.kit_table, rows, keep_order=True)
+        if len(names) > 1:
+            self.kit_title.setText(f"Parts list for a project using: {', '.join(names)} "
+                                   f"({len(rows)} parts). Quantities are added up.")
+        elif names:
+            self.kit_title.setText(f"Kit '{names[0]}': {len(rows)} parts.")
+        else:
+            self.kit_title.setText("Select a kit, or several to see one combined parts list for a new project.")
+
+    def new_kit(self):
+        from PySide6.QtWidgets import QInputDialog
+
+        from . import kits
+
+        name, ok = QInputDialog.getText(self, "New kit", "Kit name, e.g. USB-C power input:")
+        if ok and name.strip():
+            if kits.get(self.lib, name) is None:
+                kits.save(self.lib, kits.Kit(name.strip()))
+            self.refresh_kits()
+
+    def delete_kit(self):
+        from . import kits
+
+        for name in self._chosen_kits():
+            if QMessageBox.question(self, "PartKit", f"Delete kit '{name}'? The parts stay in your library.") \
+                    == QMessageBox.Yes:
+                kits.delete(self.lib, name)
+        self.refresh_kits()
+
+    def _kit_rows(self) -> list[str]:
+        rows = sorted({i.row() for i in self.kit_table.selectedIndexes()})
+        return [self.kit_table.item(r, 0).text() for r in rows]
+
+    def _single_kit(self):
+        from . import kits
+
+        names = self._chosen_kits()
+        if len(names) != 1:
+            QMessageBox.information(self, "PartKit", "Select one kit to change it.")
+            return None
+        return kits.get(self.lib, names[0])
+
+    def set_kit_qty(self):
+        from . import kits
+
+        kit = self._single_kit()
+        if kit:
+            for m in self._kit_rows():
+                kit.add(m, self.kit_qty.value())
+            kits.save(self.lib, kit)
+            self.show_kit()
+
+    def remove_from_kit(self):
+        from . import kits
+
+        kit = self._single_kit()
+        if kit:
+            for m in self._kit_rows():
+                kit.remove(m)
+            kits.save(self.lib, kit)
+            self.show_kit()
+
+    def save_kit_bom(self, path: str | None = None):
+        from . import kits
+
+        names = self._chosen_kits()
+        if not names:
+            QMessageBox.information(self, "PartKit", "Select one or more kits first.")
+            return
+        if not path:
+            default = str(Path.home() / "Documents" / (" + ".join(names) + " parts.csv"))
+            path, _ = QFileDialog.getSaveFileName(self, "Save parts list", default, "CSV (*.csv)")
+        if path:
+            kits.write_csv(kits.project_bom(self.lib, names), Path(path))
+            self.log(f"Parts list saved to {path}. It opens in Excel.")
 
     # ----- Import tab
     def _import_tab(self) -> QWidget:
