@@ -41,7 +41,7 @@ part carries the same BOM fields.
 
 ## Quick start (developer preview)
 
-Requires Python 3.11+ on Windows. The installer comes in a later milestone and
+Requires Python 3.10+ on Windows. The installer comes in a later milestone and
 won't need Python.
 
 ```powershell
