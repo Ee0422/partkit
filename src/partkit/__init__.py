@@ -1,3 +1,3 @@
 """PartKit: find, import and manage Altium Designer parts."""
 
-__version__ = "0.1.0"
+__version__ = "1.0.0"
