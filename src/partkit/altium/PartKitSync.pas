@@ -14,10 +14,10 @@
     * writes sync-result.txt so PartKit knows what succeeded.
 
   Run: File > Run Script > PartKitSync.PrjScr > Run
-  (PartKit will start this automatically in a later version.)
+  (partkit sync starts it for you when Altium is closed.)
 
-  STATUS: written against the Altium DelphiScript API but NOT yet tested in
-  Altium. Please try it in Test mode first and report any error message.
+  STATUS: tested in Altium Designer 26 with the starter pack. Copying
+  vendor parts is newer; please report any error message.
   ========================================================================== }
 
 var
@@ -25,6 +25,7 @@ var
   Results   : TStringList;
   TouchedSch: TStringList;
   TouchedPcb: TStringList;
+  Sources   : TStringList;  { downloaded libraries this run opened, closed again at the end }
 
 { ---------------- small helpers ---------------- }
 
@@ -84,6 +85,22 @@ end;
 procedure Remember(List : TStringList; Path : String);
 begin
   if List.IndexOf(Path) < 0 then List.Add(Path);
+end;
+
+procedure NoteSource(Path : String);
+begin
+  { only close what this run opened; leave libraries you had open yourself }
+  if Client.GetDocumentByPath(Path) = nil then Remember(Sources, Path);
+end;
+
+procedure CloseSources;
+var I : Integer; Doc : IServerDocument;
+begin
+  for I := 0 to Sources.Count - 1 do
+  begin
+    Doc := Client.GetDocumentByPath(Sources[I]);
+    if Doc <> nil then Client.CloseDocument(Doc);
+  end;
 end;
 
 procedure SaveDocument(Path : String);
@@ -194,6 +211,7 @@ function CopySymbol(SrcPath, SrcName : String; Dst : ISch_Lib; NewName : String)
 var Src : ISch_Lib; C, N : ISch_Component;
 begin
   Result := nil;
+  NoteSource(SrcPath);
   Src := OpenSchLib(SrcPath);
   if Src = nil then Exit;
   C := FindSchComponent(Src, SrcName);
@@ -333,6 +351,7 @@ function CopyFootprint(SrcPath, SrcName : String; Dst : IPCB_Library) : IPCB_Lib
 var Src : IPCB_Library; F, N : IPCB_LibComponent; It : IPCB_GroupIterator; P : IPCB_Primitive;
 begin
   Result := nil;
+  NoteSource(SrcPath);
   Src := OpenPcbLib(SrcPath);
   if Src = nil then Exit;
   F := FindFootprint(Src, SrcName);
@@ -543,6 +562,7 @@ begin
   Results := TStringList.Create;
   TouchedSch := TStringList.Create;
   TouchedPcb := TStringList.Create;
+  Sources := TStringList.Create;
   Block := TStringList.Create;
   Root := ExtractFileDir(ExtractFileDir(ExtractFileDir(JobPath)));
   Ok := 0; Failed := 0; InPart := False; InFp := False;
@@ -570,10 +590,11 @@ begin
 
   for I := 0 to TouchedPcb.Count - 1 do SaveDocument(TouchedPcb[I]);
   for I := 0 to TouchedSch.Count - 1 do SaveDocument(TouchedSch[I]);
+  CloseSources;
   InstallLibraries;
 
   Results.SaveToFile(Root + '\partkit-data\sync\sync-result.txt');
   ShowMessage('PartKit Sync finished: ' + IntToStr(Ok) + ' parts updated, ' + IntToStr(Failed) +
               ' failed. Open PartKit to see the details.');
-  Lines.Free; Block.Free; Results.Free; TouchedSch.Free; TouchedPcb.Free;
+  Lines.Free; Block.Free; Results.Free; TouchedSch.Free; TouchedPcb.Free; Sources.Free;
 end;
