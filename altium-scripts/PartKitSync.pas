@@ -372,11 +372,11 @@ begin
   C.AddPoint(MMsToCoord( L / 2), MMsToCoord(-W / 2));
   C.AddPoint(MMsToCoord( L / 2), MMsToCoord( W / 2));
   C.AddPoint(MMsToCoord(-L / 2), MMsToCoord( W / 2));
-  B.SetOutlineContour(C);
-  B.SetState_StandoffHeight(0);
-  B.SetState_OverallHeight(MMsToCoord(H));
   B.BodyProjection := eBoardSide_Top;
   B.Layer := eMechanical13;
+  { an extruded body: standoff 0, overall height H }
+  B.Model := B.ModelFactory_CreateExtruded(0, MMsToCoord(H), clGray);
+  B.SetOutlineContour(C);
   AddPrim(Fp, B);
 end;
 
@@ -429,7 +429,7 @@ begin
   end;
   { courtyard: pads + 0.25 mm }
   CX := PX + PL / 2 + 0.25;
-  CY := Max(PW, W) / 2 + 0.25;
+  if PW > W then CY := PW / 2 + 0.25 else CY := W / 2 + 0.25;
   AddTrack(Fp, -CX, -CY,  CX, -CY, 0.05, eMechanical15);
   AddTrack(Fp,  CX, -CY,  CX,  CY, 0.05, eMechanical15);
   AddTrack(Fp,  CX,  CY, -CX,  CY, 0.05, eMechanical15);
