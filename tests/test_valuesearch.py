@@ -114,3 +114,18 @@ def test_live_value_search(text):
     offers = V.by_value(V.parse(text))
     print(text, [(o.supplier_pn, o.mpn, o.status, o.specs) for o in offers[:3]])
     assert offers, f"no JLCPCB parts for {text}"
+
+
+@pytest.mark.skipif(not os.environ.get("PARTKIT_LIVE"), reason="talks to jlcsearch; set PARTKIT_LIVE=1")
+def test_live_probe_list_parameters():
+    """Prints how jlcsearch's list endpoints react to each parameter (information only)."""
+    from partkit.suppliers import default_http
+
+    for path, key, base in (("/resistors/list.json", "resistors", "package=0603&resistance=1k"),
+                            ("/capacitors/list.json", "capacitors", "package=0603&capacitance=100nF")):
+        for extra in ("", "&is_basic=true", "&basic=true", "&limit=500", "&tolerance=1%", "&voltage=50V",
+                      "&in_stock=true", "&sort=stock"):
+            rows = default_http("GET", f"{V.BASE}{path}?{base}{extra}", {}, None).get(key) or []
+            vals = sorted({str(r.get("resistance", r.get("capacitance_farads"))) for r in rows})[:5]
+            print(f"PROBE {path} {extra or '(none)'}: {len(rows)} rows, basic={sum(bool(r.get('is_basic')) for r in rows)}, "
+                  f"values={vals}, keys={sorted(rows[0])[:40] if rows else []}")
