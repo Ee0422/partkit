@@ -192,24 +192,26 @@ class MainWindow(QMainWindow):
         self.search_msg.setWordWrap(True)
         lay.addWidget(self.search_msg)
         filters = QHBoxLayout()
-        self.only_basic = QCheckBox("JLCPCB Basic only")
-        self.only_basic.setToolTip("Basic parts are always loaded on JLCPCB's machines: no extra fee.\n"
-                                   "Extended parts are loaded by hand for your order: about US$3 extra per part type.")
+        self.jlc_type = QComboBox()
+        self.jlc_type.addItems(["Basic and Extended", "Basic only", "Extended only"])
+        self.jlc_type.setToolTip("Basic parts are always loaded on JLCPCB's machines: no extra fee.\n"
+                                   "Extended parts are loaded by hand for your order: about US$3 extra per part type.\n"
+                                 "'Preferred' parts count as Extended here.")
         self.only_stock = QCheckBox("In stock only")
         self.only_stock.setChecked(True)
         self.only_supplier = QComboBox()
         self.only_supplier.addItem("All suppliers")
         self.narrow = QLineEdit()
         self.narrow.setPlaceholderText("Narrow results by typing, e.g. YAGEO or 1%")
-        for wdg in (self.only_basic, self.only_stock):
-            wdg.toggled.connect(self.apply_filters)
+        self.only_stock.toggled.connect(self.apply_filters)
+        self.jlc_type.currentTextChanged.connect(self.apply_filters)
         self.only_supplier.currentTextChanged.connect(self.apply_filters)
         self.narrow.textChanged.connect(self.apply_filters)
-        for wdg in (self.only_basic, self.only_stock, QLabel("Show:"), self.only_supplier, self.narrow):
+        for wdg in (QLabel("JLCPCB type:"), self.jlc_type, self.only_stock, QLabel("Show:"), self.only_supplier, self.narrow):
             filters.addWidget(wdg)
         lay.addLayout(filters)
         self.results = _table(self.RESULT_COLUMNS)
-        self.results.horizontalHeaderItem(6).setToolTip(self.only_basic.toolTip())
+        self.results.horizontalHeaderItem(6).setToolTip(self.jlc_type.toolTip())
         lay.addWidget(self.results)
         row = QHBoxLayout()
         self.add_cat = QComboBox()
@@ -276,7 +278,10 @@ class MainWindow(QMainWindow):
         self.next_btn.setEnabled(False)
 
     def _row_passes(self, r) -> bool:
-        if self.only_basic.isChecked() and r.offer.status != "Basic":
+        kind = self.jlc_type.currentText()
+        if kind == "Basic only" and r.offer.status != "Basic":
+            return False
+        if kind == "Extended only" and r.offer.status not in ("Extended", "Preferred"):
             return False
         if self.only_stock.isChecked() and r.offer.stock is not None and r.offer.stock <= 0:
             return False

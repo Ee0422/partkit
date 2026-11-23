@@ -31,8 +31,8 @@ project uses.
   apart: voltage, dielectric, tolerance, height and so on.
 - **Finds JLCPCB parts by value.** Type `1k 0603 1%` or `100nF 0603 50V X7R` and
   PartKit lists the matching JLCPCB parts, Basic first, one row per part with
-  value, size, tolerance, rating, dielectric, stock and price. Filter to Basic
-  only, in stock, one supplier, or narrow by typing. No API key is needed.
+  value, size, tolerance, rating, dielectric, stock and price. Show Basic only
+  or Extended only, in stock only, one supplier, or narrow by typing. No API key is needed.
 - **Keeps the BOM clean.** Every part gets Manufacturer, Manufacturer Part
   Number, Description, Value, Supplier 1 and Supplier Part Number 1. Comment
   shows the value. A health check flags gaps before they reach a BOM.

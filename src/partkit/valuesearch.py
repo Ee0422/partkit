@@ -250,19 +250,31 @@ def _rank(o: Offer) -> tuple:
 
 
 def by_value(q: ValueQuery, http: Http = default_http, limit: int = 50) -> list[Offer]:
-    """JLCPCB parts that match the query, Basic first, then by stock."""
+    """JLCPCB parts that match the query, Basic first, then by stock.
+
+    jlcsearch wants plain numbers (ohms, farads) and returns at most 100
+    rows, so PartKit asks twice: once for Basic parts only, so they're never
+    cut off, and once for everything.
+    """
     if q.kind == "R":
         path, key = "/resistors/list.json", "resistors"
-        params = {"resistance": format_ohms(q.value).replace("Ω", "")}
+        params = {"resistance": f"{q.value:.6g}"}
     else:
         path, key = "/capacitors/list.json", "capacitors"
-        params = {"capacitance": format_farads(q.value).replace("µ", "u")}
+        params = {"capacitance": f"{q.value:.6g}"}
     if q.package:
         params["package"] = q.package
-    r = http("GET", f"{BASE}{path}?{urllib.parse.urlencode(params)}", {}, None)
-    if not isinstance(r, dict):
-        raise SupplierError("JLCPCB parts list sent an unexpected reply.")
-    rows = r.get(key) or []
+    rows: list[dict] = []
+    seen: set[str] = set()
+    for extra in ({"is_basic": "true"}, {}):
+        r = http("GET", f"{BASE}{path}?{urllib.parse.urlencode({**params, **extra})}", {}, None)
+        if not isinstance(r, dict):
+            raise SupplierError("JLCPCB parts list sent an unexpected reply.")
+        for row in r.get(key) or []:
+            code = str(row.get("lcsc", ""))
+            if code and code not in seen:
+                seen.add(code)
+                rows.append(row)
     if not any(_matches(row, q) for row in rows):
         rows = _from_text_search(q, http)  # same parts, read from the plain search instead
     out = [_offer(row, q.kind) for row in rows if _matches(row, q)]

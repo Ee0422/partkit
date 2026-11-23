@@ -60,7 +60,7 @@ def test_resistor_value_search_is_exact_and_basic_first():
     assert [o.supplier_pn for o in offers] == ["C21190", "C114762"]  # no 68.1k, no 5%, no array
     assert offers[0].status == "Basic" and offers[0].specs["Power"] == "0.1W"
     q = urllib.parse.parse_qs(urllib.parse.urlparse(http.calls[0][1]).query)
-    assert q["package"] == ["0603"] and q["resistance"] == ["1k"]
+    assert q["package"] == ["0603"] and q["resistance"] == ["1000"] and q["is_basic"] == ["true"]
 
 
 def test_capacitor_value_search_filters_voltage_and_dielectric():
@@ -112,32 +112,6 @@ def test_added_resistor_waits_for_cad_files(lib):
 @pytest.mark.parametrize("text", ["1k 0603 1%", "100nF 0603 50V X7R", "10uF 0805"])
 def test_live_value_search(text):
     offers = V.by_value(V.parse(text))
-    print(text, [(o.supplier_pn, o.mpn, o.status, o.specs) for o in offers[:3]])
+    print(text, len(offers), [(o.supplier_pn, o.mpn, o.status, o.specs) for o in offers[:3]])
     assert offers, f"no JLCPCB parts for {text}"
-
-
-@pytest.mark.skipif(not os.environ.get("PARTKIT_LIVE"), reason="talks to jlcsearch; set PARTKIT_LIVE=1")
-def test_live_probe_list_parameters():
-    """Prints how jlcsearch's list endpoints react to each parameter (information only)."""
-    from partkit.suppliers import default_http
-
-    def show(path, key, q):
-        try:
-            rows = default_http("GET", f"{V.BASE}{path}?{q}", {}, None).get(key) or []
-        except Exception as e:  # noqa: BLE001
-            print(f"PROBE {path}?{q}: ERROR {e}")
-            return
-        print(f"PROBE {path}?{q}: {len(rows)} rows, basic={sum(bool(r.get('is_basic')) for r in rows)}")
-        for r in sorted(rows, key=lambda r: -int(r.get("stock") or 0))[:3]:
-            print("   ", {k: r.get(k) for k in ("lcsc", "mfr", "resistance", "capacitance_farads", "voltage_rating",
-                                              "temperature_coefficient", "tolerance_fraction", "power_watts",
-                                              "is_basic", "stock", "description")})
-
-    show("/resistors/list.json", "resistors", "package=0603&resistance=1k")
-    show("/resistors/list.json", "resistors", "package=0603&resistance=1000")
-    show("/resistors/list.json", "resistors", "package=0603&resistance=10k")
-    show("/resistors/list.json", "resistors", "package=0603")
-    for c in ("100nF", "100n", "0.1uF", "100000pF", "1e-7", "0.0000001"):
-        show("/capacitors/list.json", "capacitors", f"package=0603&capacitance={c}")
-    show("/capacitors/list.json", "capacitors", "package=0603")
-    show("/capacitors/list.json", "capacitors", "package=0603&capacitance_farads=1e-7")
+    assert offers[0].status == "Basic", f"no Basic part first for {text}"

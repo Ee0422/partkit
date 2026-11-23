@@ -147,9 +147,11 @@ def test_value_results_one_row_per_part_with_filters(win):
     cols = {win.results.horizontalHeaderItem(c).text(): c for c in range(win.results.columnCount())}
     assert win.results.item(0, cols["Sold by"]).text() == "JLCPCB, LCSC"
     assert win.results.item(0, cols["Value"]).text() == "1kΩ"
-    win.only_basic.setChecked(True)
-    assert win.results.rowCount() == 1
-    win.only_basic.setChecked(False)
+    win.jlc_type.setCurrentText("Basic only")
+    assert win.results.rowCount() == 1 and win.results.item(0, 0).text() == "BASIC1K"
+    win.jlc_type.setCurrentText("Extended only")
+    assert win.results.rowCount() == 1 and win.results.item(0, 0).text() == "EXT1K"
+    win.jlc_type.setCurrentText("Basic and Extended")
     win.narrow.setText("ext")
     assert win.results.rowCount() == 1 and win.results.item(0, 0).text() == "EXT1K"
     win.narrow.setText("")
