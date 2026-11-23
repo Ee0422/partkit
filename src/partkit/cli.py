@@ -175,6 +175,20 @@ def undo(mpn: str):
 
 
 @app.command()
+def delete(mpns: list[str], from_altium: bool = typer.Option(False, "--from-altium",
+                                                              help="Also remove its symbol from your library on the next sync")):
+    """Take parts out of PartKit, its templates and projects (`partkit undo <mpn>` brings one back)."""
+    lib = open_lib()
+    for m in mpns:
+        try:
+            lib.delete_part(m, from_altium=from_altium)
+        except KeyError as e:
+            console.print(f"[red]{e.args[0]}[/]")
+            raise typer.Exit(1)
+        console.print(f"Deleted {m}." + (" partkit sync removes it from Altium too." if from_altium else ""))
+
+
+@app.command()
 def check():
     """Health check: missing BOM fields, missing files, 3D models that need replacing."""
     issues = open_lib().health_check()
@@ -189,7 +203,7 @@ def check():
 
 @app.command()
 def sync(start: bool = typer.Option(True, help="Ask Altium to run PartKit Sync automatically.")):
-    """Send approved parts to Altium (runs PartKit Sync), and read back the last result."""
+    """Send everything waiting to Altium (runs PartKit Sync), and read back the last result."""
     from .altium_launch import copy_scripts, start_sync
 
     lib = open_lib()
@@ -206,7 +220,8 @@ def sync(start: bool = typer.Option(True, help="Ask Altium to run PartKit Sync a
         console.print(msg)
     else:
         console.print(f"In Altium: File > Run Script > Browse, choose {prjscr}, then pick Run.")
-    console.print("When Altium has finished, run [bold]partkit sync[/] again to record the result.")
+    console.print("This also writes new parts into project libraries. The window (partkit gui) records the "
+                  "result by itself; from the command line, run [bold]partkit sync[/] again when Altium is done.")
 
 
 @app.command()
@@ -497,8 +512,9 @@ app.add_typer(project_app, name="project")
 def project_new(name: str, template: list[str] = typer.Option([], "--template", help="Start from this template (repeat)"),
                 copy_of: str = typer.Option("", "--copy-of", help="Start as a copy of another project"),
                 own_library: bool = typer.Option(False, "--own-library", help="Give it its own .SchLib/.PcbLib"),
-                folder: Optional[Path] = typer.Option(None, "--folder", file_okay=False,
-                                                      help="Its library folder; the .SchLib/.PcbLib already there are used"),
+                folder: Optional[Path] = typer.Option(None, "--folder", "--altium-project",
+                                                      help="Your board's .PrjPcb (or a library file or folder); "
+                                                           "the .SchLib/.PcbLib already in it are used"),
                 schlib: str = typer.Option("", "--schlib", help="Which .SchLib, if the folder has several"),
                 pcblib: str = typer.Option("", "--pcblib", help="Which .PcbLib, if the folder has several")):
     """Make a project: empty, from templates, or as a copy of another project."""
@@ -583,7 +599,7 @@ def project_update(name: str, everything: bool = typer.Option(False, "--all", he
         return
     if start:
         console.print(start_sync(copy_scripts())[1])
-    console.print(f"When Altium has finished, run [bold]partkit project update \"{p.name}\"[/] again to record it.")
+    console.print("When Altium has finished, run [bold]partkit sync[/] to record it.")
 
 
 @app.command("remove-starter")

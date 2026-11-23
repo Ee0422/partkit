@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -31,8 +32,10 @@ class Project:
     folder: str = ""                 # where the project's own library lives
     in_library: list[str] = field(default_factory=list)  # MPNs already written there
     templates: list[str] = field(default_factory=list)   # the templates it started from
-    schlib_file: str = ""            # file names inside folder; "" = named after the project
+    schlib_file: str = ""            # file names inside folder (or full paths); "" = named after the project
     pcblib_file: str = ""
+    prjpcb: str = ""                 # the Altium project (.PrjPcb) this board's library belongs to
+    written_at: dict[str, float] = field(default_factory=dict)  # MPN -> when PartKit Sync wrote it there
 
     @property
     def schlib(self) -> str:
@@ -128,16 +131,84 @@ def use_folder(proj: Project, folder: str | Path, schlib: str = "", pcblib: str 
             raise ValueError(f"{folder} has {len(found)} .{kind} files ({', '.join(found)}). Choose one.")
     proj.folder = str(folder)
     proj.schlib_file, proj.pcblib_file = chosen
+    proj.prjpcb = ""
     proj.own_library = True
+    proj.written_at = {}
     proj.in_library = []  # PartKit doesn't know what's in a library it hasn't written; send everything once
     return proj
+
+
+def libraries_in_prjpcb(prjpcb: str | Path) -> tuple[list[str], list[str]]:
+    """Full paths of the .SchLib and .PcbLib files an Altium project (.PrjPcb) contains.
+
+    A .PrjPcb is a text file with one DocumentPath= line per document, relative to
+    the project's folder.
+    """
+    prj = Path(prjpcb)
+    schs, pcbs = [], []
+    text = prj.read_text(encoding="utf-8", errors="replace")
+    for line in text.splitlines():
+        key, _, value = line.partition("=")
+        if key.strip().lower() != "documentpath" or not value.strip():
+            continue
+        doc = value.strip().replace("\\", "/")
+        full = Path(doc) if re.match(r"^[A-Za-z]:/|^/", doc) else prj.parent / doc
+        if doc.lower().endswith(".schlib"):
+            schs.append(str(full))
+        elif doc.lower().endswith(".pcblib"):
+            pcbs.append(str(full))
+    return schs, pcbs
+
+
+def use_prjpcb(proj: Project, prjpcb: str | Path, schlib: str = "", pcblib: str = "") -> Project:
+    """Point a project at an Altium project and the libraries already in it.
+
+    One .SchLib (or .PcbLib) in the project: that one is used. None: a new one named
+    after the Altium project is made next to it. Several: pass the one to use, or
+    ValueError says which to choose from.
+    """
+    prj = Path(prjpcb)
+    if not prj.is_file():
+        raise ValueError(f"{prj} wasn't found.")
+    schs, pcbs = libraries_in_prjpcb(prj)
+    chosen = []
+    for kind, given, found in (("SchLib", schlib, schs), ("PcbLib", pcblib, pcbs)):
+        if given:
+            chosen.append(str(given))
+        elif len(found) == 1:
+            chosen.append(found[0])
+        elif not found:
+            chosen.append(str(prj.with_suffix("." + kind)))
+        else:
+            names = ", ".join(Path(f).name for f in found)
+            raise ValueError(f"{prj.name} has {len(found)} .{kind} files ({names}). Choose one.")
+    proj.folder = str(prj.parent)
+    proj.schlib_file, proj.pcblib_file = chosen  # full paths; Path(folder) / full path keeps the full path
+    proj.prjpcb = str(prj)
+    proj.own_library = True
+    proj.in_library = []
+    proj.written_at = {}
+    return proj
+
+
+def use_file(proj: Project, path: str | Path, schlib: str = "", pcblib: str = "") -> Project:
+    """Point a project at what the person picked: an Altium project, a library file, or a folder."""
+    p = Path(path)
+    if p.suffix.lower() == ".prjpcb":
+        return use_prjpcb(proj, p, schlib, pcblib)
+    if p.suffix.lower() == ".schlib":
+        return use_folder(proj, p.parent, schlib or p.name, pcblib)
+    if p.suffix.lower() == ".pcblib":
+        return use_folder(proj, p.parent, schlib, pcblib or p.name)
+    return use_folder(proj, p, schlib, pcblib)
 
 
 def create(lib: Library, name: str, templates: list[str] | None = None, copy_of: str = "",
            own_library: bool = False, folder: str = "", schlib: str = "", pcblib: str = "") -> Project:
     """A new project, empty, from templates, or as a copy of another project's parts list.
 
-    Give a folder to have the project use its own library there (see use_folder).
+    Give a folder, a .SchLib/.PcbLib or an Altium project (.PrjPcb) to have the project use
+    its own library there (see use_file).
     """
     name = name.strip()
     if not name:
@@ -147,7 +218,7 @@ def create(lib: Library, name: str, templates: list[str] | None = None, copy_of:
     proj = Project(name, own_library=own_library, folder=default_folder(lib, name),
                    templates=list(templates or []))
     if folder:
-        use_folder(proj, folder, schlib, pcblib)
+        use_file(proj, folder, schlib, pcblib)
     if copy_of:
         src = get(lib, copy_of)
         if src is None:
@@ -210,7 +281,8 @@ def write_update_job(lib: Library, proj: Project, everything: bool = False) -> t
     if everything:
         ready = [p for p in (lib.get(it.mpn) for it in proj.items) if p and p.stage == F.READY]
     Path(proj.folder).mkdir(parents=True, exist_ok=True)
-    job = lib.write_sync_job(parts=ready, dst=(proj.schlib, proj.pcblib), kind=f"project:{proj.name}")
+    job = lib.write_sync_job(parts=ready, dst=(proj.schlib, proj.pcblib), kind=f"project:{proj.name}",
+                             prjpcb=proj.prjpcb)
     return job, waiting
 
 
@@ -222,4 +294,15 @@ def record_written(lib: Library, name: str, mpns: list[str]) -> None:
     for m in mpns:
         if m not in proj.in_library:
             proj.in_library.append(m)
+        proj.written_at[m] = time.time()
     save(lib, proj)
+
+
+def changed_since_written(lib: Library, proj: Project) -> list[str]:
+    """Parts in the project's library that you've changed in PartKit since they were written there."""
+    out = []
+    for m in proj.in_library:
+        p = lib.get(m)
+        if p and m in proj.written_at and p.updated > proj.written_at[m] + 1:
+            out.append(m)
+    return out

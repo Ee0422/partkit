@@ -90,22 +90,24 @@ def manual_steps(prjscr: Path) -> str:
 def start_sync(prjscr: Path | None = None, x2: Path | None = None) -> tuple[bool, str]:
     """Ask Altium to run PartKit Sync. Returns (started, message for the user).
 
-    If Altium is already open, PartKit doesn't start a second copy (Altium
-    can't hand a script to a running window); it says how to run it there.
+    If Altium is already open, Windows hands the command to that window and it
+    runs the script there (checked in Altium Designer 26), so no second copy starts.
     """
     prjscr = prjscr or copy_scripts()
     manual = manual_steps(prjscr)
     if os.name != "nt":
         return False, manual
-    if altium_running():
-        return False, "Altium is already open, so PartKit didn't start another copy. " + manual
     x2 = x2 or find_altium()
     if x2 is None:
         return False, "Altium Designer wasn't found automatically. " + manual
+    running = altium_running()
     try:
         subprocess.Popen(sync_command(x2, prjscr), close_fds=True)
     except OSError as e:
         return False, f"Couldn't start Altium ({e}). " + manual
+    if running:
+        return True, ("Sent to Altium. PartKit Sync runs in your open Altium and the result shows here "
+                      "when it's done. If nothing happens within a minute, " + manual)
     return True, "Starting Altium and PartKit Sync. If nothing happens within a minute, " + manual
 
 

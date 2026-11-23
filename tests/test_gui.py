@@ -40,9 +40,8 @@ def test_approve_and_set_category(win):
     win.parts_table.selectRow(0)
     win.approve()
     assert win.lib.get("X1").stage == "Ready"
-    win.cat_choice.setCurrentText("Power")
     win.parts_table.selectRow(0)
-    win.set_category()
+    win.set_category("Power")
     p = win.lib.get("X1")
     assert p.category == "Power" and p.target_schlib == "Libraries/Power.SchLib"
 
@@ -279,7 +278,7 @@ def test_projects_tab_and_add_to_project(win, monkeypatch):
     win.add_to_project()
     win.project_list.item(0).setSelected(True)
     assert win.kit_table.rowCount() == 1 and not win.proj_lib_box.isHidden()
-    assert "1 new" in win.update_lib_btn.text()
+    assert "1 new part" in win.proj_status.text()
     calls = []
     monkeypatch.setattr(gui, "start_sync", lambda prjscr: (calls.append(prjscr), (True, "ok"))[1])
     win.update_project_library()
@@ -289,7 +288,7 @@ def test_projects_tab_and_add_to_project(win, monkeypatch):
 def test_send_button_counts_changes(win):
     win.lib.save(Part(mpn="Z1", stage="Ready", needs_sync=True))
     win.refresh_library()
-    assert win.sync_btn.text() == "Send 1 change to Altium"
+    assert win.sync_btn.text() == "Send to Altium (1)"
 
 
 def test_new_project_dialog_picks_existing_library_folder(win, monkeypatch, tmp_path):
@@ -314,4 +313,4 @@ def test_new_project_dialog_picks_existing_library_folder(win, monkeypatch, tmp_
     win.new_project()
     proj = projects.get(win.lib, "Board")
     assert proj.own_library and proj.schlib.endswith("STM32.SchLib") and proj.pcblib.endswith("STM32.PcbLib")
-    assert "STM32.SchLib + STM32.PcbLib" == win.proj_folder.text()
+    assert "STM32.SchLib + STM32.PcbLib" in win.proj_folder.text()

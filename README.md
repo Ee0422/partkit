@@ -40,12 +40,11 @@ project uses.
   files for, with the symbol copied from any part you choose.
 - **Projects.** Each board gets a project with its own parts list, started empty,
   from templates (groups such as "USB-C power input") or as a copy of another
-  project. Add more parts any time with *Add to project*. Choose a *project library
-  folder* and the project gets its own library there: if the folder already has
-  a .SchLib and .PcbLib (your board's existing library), PartKit adds to those,
-  whatever they're called; if not, it makes new ones named after the project.
-  *Update project library* writes only the parts the project's library doesn't
-  have yet. The starting parts list saves as a CSV for Excel; the real BOM comes
+  project. Add more parts any time with *Add to project*. Choose your board's
+  Altium project (.PrjPcb) and the project gets its own library: PartKit adds to
+  the .SchLib and .PcbLib already in it, whatever they're called, or makes new
+  ones next to it. *Send to Altium* writes only the parts the project's library
+  doesn't have yet, and the Projects tab tells you when a part changed since. The starting parts list saves as a CSV for Excel; the real BOM comes
   from Altium once the schematic is done.
 - **Favourites.** Star the parts you use all the time; they're listed first.
 - **Keeps the BOM clean.** Every part gets Manufacturer, Manufacturer Part
@@ -89,23 +88,24 @@ partkit --help       # the command line
    supplier key is optional and adds supplier numbers, stock, price and
    specs. Mouser's is the quickest to get (one form, key by email); add it in
    *Settings*. Keys stay in Windows Credential Manager.
-2. **Import.** Downloads import by themselves (*My parts > Import CAD downloads
+2. **Import.** Downloads import by themselves (*Find parts > Import CAD downloads
    from my Downloads folder automatically*), or drop files anywhere on the window.
 3. **Check.** On *My parts*, check the symbol and footprint, set the category and
    click **Mark Ready**.
-4. **Send to Altium.** The button shows how many changes are waiting. If Altium is closed, PartKit
-   opens it and runs PartKit Sync, which writes the parts into your libraries.
-   If Altium is already open, PartKit doesn't start a second copy: run it there
-   with File > Run Script > PartKitSync.PrjScr (it stays in that list after the
-   first time).
-5. **Problems.** *My parts* shows how many problems PartKit found (BOM gaps,
-   missing files, simple 3D models); *Show problems* lists them.
-6. **Reuse.** On *My parts*, select a Ready part and click **New value from this
-   part** or **New part from this footprint**. Pick the supplier part yourself;
+4. **Send to Altium.** One button (top right) shows how many changes are waiting:
+   new and changed parts, deleted parts, and new parts for project libraries.
+   PartKit runs PartKit Sync in your open Altium (or opens Altium first), which
+   writes the parts into your libraries. The result shows in PartKit by itself.
+5. **Problems.** When PartKit finds problems (BOM gaps, missing files, simple 3D
+   models), *My parts* shows "⚠ N problems"; click it for the list.
+6. **More.** On *My parts*, **More ▾** (or right-click a part) has Favourite,
+   **New value from this part**, **New part from this footprint**, Add to
+   template, Set category, Attach 3D model, Mark obsolete, **Delete** and Undo.
+   For New value and New part, pick the supplier part yourself;
    PartKit warns if its package doesn't match the footprint.
 7. **Projects.** On *Projects*, make a project, add parts from *My parts* with
-   **Add to project**, and (optionally) choose its library folder, such as the
-   folder of your Altium project that already has its .SchLib and .PcbLib.
+   **Add to project**, and (optionally) choose your board's Altium project
+   (.PrjPcb) so its parts go into that project's own library.
 
 Use **Settings > Test mode** (or `partkit --test`) to try things on a
 throwaway library.
@@ -126,9 +126,10 @@ throwaway library.
 | `list`, `show <mpn>` | Browse parts and see the parameters Altium will get |
 | `approve <mpn>` (or `ready`) | To check → Ready |
 | `obsolete <mpn>` | Mark a part obsolete |
-| `undo <mpn>` | Undo the last change to a part |
+| `undo <mpn>` | Undo the last change to a part (also brings back a deleted part) |
+| `delete <mpn> [--from-altium]` | Take a part out of PartKit, its templates and projects |
 | `check` | Health check: BOM gaps, missing files, Simple or missing 3D models |
-| `sync` | Send Ready parts to Altium (starts PartKit Sync) and read the last result |
+| `sync` | Send everything waiting to Altium (starts PartKit Sync, also in an open Altium) and read the last result |
 | `scripts` | Copy the latest Altium script to Documents\PartKit Scripts |
 | `gui` | Open the window |
 | `set-target <category> <schlib> <pcblib>` | Choose the libraries a category goes into |
@@ -136,10 +137,10 @@ throwaway library.
 | `new-value <part> --value 4.7k` | New value with the same checked symbol, footprint and 3D (or `--mpn` for other parts) |
 | `new-from-footprint <part> <mpn> [--symbol-from <part>]` | New part on a checked footprint |
 | `favourite <mpn> [--off]` | Star a part |
-| `project new <name> [--template T] [--folder F]` | Make a project; with `--folder`, it uses the libraries already in F (`--schlib`/`--pcblib` if several) |
+| `project new <name> [--template T] [--altium-project F.PrjPcb]` | Make a project; it uses the libraries already in that Altium project (`--schlib`/`--pcblib` if several) |
 | `project add <name> <mpn>...` | Add parts to one project |
 | `project show <name> [--out file.csv]` | A project's parts and starting parts list |
-| `project update <name> [--all]` | Write only the new parts into the project's own library |
+| `project update <name> [--all]` | Write the project's new parts (or `--all`) into its own library now |
 | `template add/remove/list/delete/bom` | Manage templates (`kit` also works) |
 | `remove-starter` | Take out the unchecked starter passives older versions added |
 | `test-reset` | Reset the test library (with `--test`) |
