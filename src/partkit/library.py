@@ -239,6 +239,7 @@ class Library:
                 ("BOX_MM", ",".join(f"{x:g}" for x in p.box_mm)),
                 ("COMPONENT_NAME", F.display_name(p.params, p.category) or p.mpn),
                 ("GENERIC", "1" if p.source == "PartKit" else "0"),
+                ("DESIGNATOR", F.DESIGNATOR_PREFIX.get(p.category, "U") + "?"),
             ):
                 lines.append(f"{k}={_clean(v)}")
             comment = p.params.get("Value") or p.mpn

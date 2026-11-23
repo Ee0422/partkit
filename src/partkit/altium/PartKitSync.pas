@@ -207,8 +207,10 @@ begin
   Result := C;
 end;
 
-function CopySymbol(SrcPath, SrcName : String; Dst : ISch_Lib; NewName : String) : ISch_Component;
-var Src : ISch_Lib; C, N : ISch_Component;
+function CopySymbol(SrcPath, SrcName : String; Dst : ISch_Lib; NewName, Desig : String) : ISch_Component;
+{ Builds a new symbol and copies the vendor's drawing into it piece by piece.
+  (Replicate on the whole component left the symbol empty in Altium 26.) }
+var Src : ISch_Lib; C, N : ISch_Component; It : ISch_Iterator; P, Q : ISch_GraphicalObject;
 begin
   Result := nil;
   NoteSource(SrcPath);
@@ -216,10 +218,53 @@ begin
   if Src = nil then Exit;
   C := FindSchComponent(Src, SrcName);
   if C = nil then Exit;
-  N := C.Replicate;
+  N := SchServer.SchObjectFactory(eSchComponent, eCreate_Default);
+  N.CurrentPartID := 1;
+  N.DisplayMode := 0;
+  try
+    N.PartCount := C.PartCount;
+    N.DisplayModeCount := C.DisplayModeCount;
+  except
+  end;
   N.LibReference := NewName;
+  N.Designator.Text := Desig;
+  It := C.SchIterator_Create;
+  It.AddFilter_ObjectSet(MkSet(ePin, eLine, ePolyline, ePolygon, eRectangle, eRoundRectangle,
+    eArc, eEllipticalArc, eEllipse, ePie, eBezier, eLabel, eTextFrame, eImage));
+  P := It.FirstSchObject;
+  while P <> nil do
+  begin
+    Q := P.Replicate;
+    N.AddSchObject(Q);
+    P := It.NextSchObject;
+  end;
+  C.SchIterator_Destroy(It);
   Dst.AddSchComponent(N);
   Result := N;
+end;
+
+function IsEmptySymbol(C : ISch_Component) : Boolean;
+var It : ISch_Iterator;
+begin
+  It := C.SchIterator_Create;
+  It.AddFilter_ObjectSet(MkSet(ePin, eLine, ePolyline, ePolygon, eRectangle, eArc, eEllipse));
+  Result := It.FirstSchObject = nil;
+  C.SchIterator_Destroy(It);
+end;
+
+procedure RemoveDefaultComponents;
+{ A new .SchLib starts with an empty Component_1; remove it once real parts are in. }
+var I : Integer; Lib : ISch_Lib; C : ISch_Component;
+begin
+  for I := 0 to TouchedSch.Count - 1 do
+  begin
+    Lib := SchServer.GetSchDocumentByPath(TouchedSch[I]);
+    if Lib <> nil then
+    begin
+      C := FindSchComponent(Lib, 'Component_1');
+      if (C <> nil) and IsEmptySymbol(C) then Lib.RemoveSchComponent(C);
+    end;
+  end;
 end;
 
 procedure SetParameter(Comp : ISch_Component; Name, Value : String);
@@ -524,7 +569,8 @@ begin
       Comp := NewGenericSymbol(SchDst, Name, Kind);
     end
     else
-      Comp := CopySymbol(AbsPath(BlockValue(Block, 'SRC_SCHLIB')), BlockValue(Block, 'SRC_SYMBOL'), SchDst, Name);
+      Comp := CopySymbol(AbsPath(BlockValue(Block, 'SRC_SCHLIB')), BlockValue(Block, 'SRC_SYMBOL'), SchDst, Name,
+                         BlockValue(Block, 'DESIGNATOR'));
   end;
   if Comp = nil then begin Result := 'symbol ' + BlockValue(Block, 'SRC_SYMBOL') + ' not found'; Exit; end;
   ApplyParameters(Comp, Block);
@@ -588,6 +634,7 @@ begin
     else if InPart or InFp then Block.Add(Line);
   end;
 
+  RemoveDefaultComponents;
   for I := 0 to TouchedPcb.Count - 1 do SaveDocument(TouchedPcb[I]);
   for I := 0 to TouchedSch.Count - 1 do SaveDocument(TouchedSch[I]);
   CloseSources;
