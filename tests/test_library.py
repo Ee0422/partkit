@@ -53,3 +53,10 @@ def test_sync_job_has_generic_footprints(lib):
     job = lib.write_sync_job().read_text(encoding="utf-8-sig")
     assert "[FOOTPRINT]" in job and "NAME=RESC1608X55N" in job and "PAD_X_MM=0.825" in job
     assert "GENERIC=1" in job
+
+
+def test_imported_passive_without_specs_is_named_by_mpn():
+    from partkit import fields as F
+
+    assert F.display_name({"Manufacturer Part Number": "RC0603FR-071KL"}, "Resistors") == ""
+    assert F.display_name({"Resistance": "1k", "Size": "0603"}, "Resistors") == "R 1k 0603"

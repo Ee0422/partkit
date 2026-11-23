@@ -32,6 +32,16 @@ class PcbLibInfo:
     embedded_models: int  # STEP/3D models stored inside the PcbLib
 
 
+def _fix_text(v: str) -> str:
+    """Newer Altium files store text as UTF-8; we decode as latin-1, so repair it when it fits."""
+    if any(ord(c) > 127 for c in v):
+        try:
+            return v.encode("latin-1").decode("utf-8")
+        except UnicodeError:
+            pass
+    return v
+
+
 def parse_records(raw: bytes) -> list[dict[str, str]]:
     """Split Altium's '|KEY=VALUE|KEY=VALUE' records into dicts.
 
@@ -49,7 +59,7 @@ def parse_records(raw: bytes) -> list[dict[str, str]]:
             part = part.lstrip("|")
             if "=" in part:
                 k, v = part.split("=", 1)
-                rec[k.strip().upper()] = v.strip()
+                rec[k.strip().upper()] = _fix_text(v.strip())
         if rec:
             out.append(rec)
     return out
@@ -83,6 +93,8 @@ def read_schlib(ole) -> SchLibInfo:
             continue
         p = {}
         for rec in parse_records(data):
+            if rec.get("RECORD") == "1" and rec.get("COMPONENTDESCRIPTION"):
+                p.setdefault("Description", rec["COMPONENTDESCRIPTION"])
             if rec.get("RECORD") == "41" and rec.get("NAME") and "TEXT" in rec:
                 p[rec["NAME"]] = rec["TEXT"]
         if p:
@@ -172,7 +184,7 @@ def _unpack(raw: bytes) -> bytes:
     """IntLib streams are zlib-compressed copies of the source files; some carry a short header."""
     import zlib
 
-    for off in (0, 4, 8):
+    for off in (0, 1, 4, 8):  # Altium writes a 1-byte marker before the zlib data
         try:
             return zlib.decompress(raw[off:])
         except zlib.error:

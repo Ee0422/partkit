@@ -54,3 +54,11 @@ def test_extract_embedded_models():
         ("Library", "Models", "0"): zlib.compress(b"ISO-10303-21;DATA"),
     })
     assert extract_embedded_models(ole) == [("QFN16.step", b"ISO-10303-21;DATA")]
+
+
+def test_utf8_text_is_repaired():
+    from partkit.altium_files import parse_records
+
+    rec = parse_records("|RECORD=1|COMPONENTDESCRIPTION=1 kOhms ±1%".encode("utf-8"))[0]
+    assert rec["COMPONENTDESCRIPTION"] == "1 kOhms ±1%"
+    assert parse_records("|NAME=10µF".encode("latin-1"))[0]["NAME"] == "10µF"

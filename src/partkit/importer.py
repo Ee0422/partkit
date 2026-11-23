@@ -169,7 +169,7 @@ def _vendor_params(info: SchLibInfo | None, symbol: str) -> dict[str, str]:
     raw = info.parameters.get(symbol) or (next(iter(info.parameters.values())) if info.parameters else {})
     out = {}
     for k, v in raw.items():
-        if v and v != "*":
+        if v and v != "*" and k.strip().lower() not in F.VENDOR_LINK_FIELDS:
             out[F.normalise_field(k)] = v
     return out
 
@@ -241,6 +241,10 @@ def import_zip(lib: Library, zip_path: Path, mpn: str | None = None, category: s
         if p_info and len(p_info.footprints) > 1:
             messages.append(f"{pcblib.name} holds {len(p_info.footprints)} footprints; using {footprint!r}.")
 
+        if provider == "Manufacturer/other" and s_info:
+            keys = " ".join(k.lower() for ps in s_info.parameters.values() for k in ps)
+            if "snapeda" in keys or "snapmagic" in keys:
+                provider = "SnapMagic"
         params = _vendor_params(s_info, symbol)
         mpn = (mpn or params.get("Manufacturer Part Number") or guess_mpn_from_name(zip_path.name)
                or symbol or zip_path.stem).strip()
