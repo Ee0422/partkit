@@ -121,11 +121,23 @@ def test_live_probe_list_parameters():
     """Prints how jlcsearch's list endpoints react to each parameter (information only)."""
     from partkit.suppliers import default_http
 
-    for path, key, base in (("/resistors/list.json", "resistors", "package=0603&resistance=1k"),
-                            ("/capacitors/list.json", "capacitors", "package=0603&capacitance=100nF")):
-        for extra in ("", "&is_basic=true", "&basic=true", "&limit=500", "&tolerance=1%", "&voltage=50V",
-                      "&in_stock=true", "&sort=stock"):
-            rows = default_http("GET", f"{V.BASE}{path}?{base}{extra}", {}, None).get(key) or []
-            vals = sorted({str(r.get("resistance", r.get("capacitance_farads"))) for r in rows})[:5]
-            print(f"PROBE {path} {extra or '(none)'}: {len(rows)} rows, basic={sum(bool(r.get('is_basic')) for r in rows)}, "
-                  f"values={vals}, keys={sorted(rows[0])[:40] if rows else []}")
+    def show(path, key, q):
+        try:
+            rows = default_http("GET", f"{V.BASE}{path}?{q}", {}, None).get(key) or []
+        except Exception as e:  # noqa: BLE001
+            print(f"PROBE {path}?{q}: ERROR {e}")
+            return
+        print(f"PROBE {path}?{q}: {len(rows)} rows, basic={sum(bool(r.get('is_basic')) for r in rows)}")
+        for r in sorted(rows, key=lambda r: -int(r.get("stock") or 0))[:3]:
+            print("   ", {k: r.get(k) for k in ("lcsc", "mfr", "resistance", "capacitance_farads", "voltage_rating",
+                                              "temperature_coefficient", "tolerance_fraction", "power_watts",
+                                              "is_basic", "stock", "description")})
+
+    show("/resistors/list.json", "resistors", "package=0603&resistance=1k")
+    show("/resistors/list.json", "resistors", "package=0603&resistance=1000")
+    show("/resistors/list.json", "resistors", "package=0603&resistance=10k")
+    show("/resistors/list.json", "resistors", "package=0603")
+    for c in ("100nF", "100n", "0.1uF", "100000pF", "1e-7", "0.0000001"):
+        show("/capacitors/list.json", "capacitors", f"package=0603&capacitance={c}")
+    show("/capacitors/list.json", "capacitors", "package=0603")
+    show("/capacitors/list.json", "capacitors", "package=0603&capacitance_farads=1e-7")
