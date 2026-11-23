@@ -1,7 +1,8 @@
-# PartKit setup and test guide (milestone 1)
+# PartKit setup and test guide
 
-This guide is for the developer preview. A one-click installer replaces steps 1
-and 2 in a later milestone.
+The easiest way is the installer from
+[Releases](https://github.com/Ee0422/partkit/releases): run it, open PartKit,
+and press Start. The steps below are for the command line.
 
 ## 1. Install
 
@@ -44,8 +45,10 @@ touched while you use `--test`.
 
 ## 4. Run PartKit Sync in Altium
 
-1. In Altium: **File > Run Script > Browse**, choose
-   `altium-scripts\PartKitSync.PrjScr` from the PartKit folder, pick `Run`.
+1. Run `partkit --test sync`. PartKit copies the script to
+   `Documents\PartKit Scripts` and asks Altium to run it. If Altium doesn't
+   start it, go to **File > Run Script > Browse**, choose
+   `Documents\PartKit Scripts\PartKitSync.PrjScr`, and pick `Run`.
 2. If it asks for a job file, choose
    `Documents\PartKit Library (Test)\partkit-data\sync\pending-sync.txt`.
 3. When it finishes, run `partkit --test sync` again to read the result.

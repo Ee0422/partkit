@@ -1,7 +1,7 @@
 """Read names and facts out of Altium .SchLib and .PcbLib files.
 
 Both are OLE compound files. PartKit only reads them; writing is left to
-Altium itself (see altium-scripts/PartKitSync.pas), because only Altium can
+Altium itself (see partkit/altium/PartKitSync.pas), because only Altium can
 write these files safely.
 
 Every function here takes an "ole" object with the olefile.OleFileIO
