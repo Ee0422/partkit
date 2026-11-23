@@ -20,6 +20,7 @@ def test_stages_sync_job_and_result(lib):
     assert "MPN=LM358DR" in job and "STAGE=Released" in job
     assert "PARAM=Manufacturer|TI" in job and "PARAM=Manufacturer Part Number|LM358DR" in job
     assert "PARAM=PartKit Status|Released" in job
+    assert "DESIGNATOR=U?" in job  # vendor designators like "RC0603FR-071KL" are replaced
     (lib.root / "partkit-data/sync/sync-result.txt").write_text("OK=LM358DR\r\n", encoding="utf-8")
     assert lib.read_sync_result() == ["LM358DR: synced"]
     assert lib.write_sync_job() is None

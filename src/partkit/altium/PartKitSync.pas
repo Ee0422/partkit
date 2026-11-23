@@ -207,19 +207,91 @@ begin
   Result := C;
 end;
 
-function CopySymbol(SrcPath, SrcName : String; Dst : ISch_Lib; NewName : String) : ISch_Component;
-var Src : ISch_Lib; C, N : ISch_Component;
+function CopyDrawing(C, N : ISch_Component) : Integer;
+{ copies every pin, line, shape and label of C into N; returns how many }
+var It : ISch_Iterator; P : ISch_GraphicalObject;
+begin
+  Result := 0;
+  It := C.SchIterator_Create;
+  It.AddFilter_ObjectSet(MkSet(ePin, eLine, ePolyline, ePolygon, eRectangle, eRoundRectangle,
+    eArc, eEllipticalArc, eEllipse, ePie, eBezier, eLabel, eTextFrame, eImage));
+  P := It.FirstSchObject;
+  while P <> nil do
+  begin
+    N.AddSchObject(P.Replicate);
+    Inc(Result);
+    P := It.NextSchObject;
+  end;
+  C.SchIterator_Destroy(It);
+end;
+
+procedure CloseDocumentAt(Path : String);
+var Doc : IServerDocument;
+begin
+  Doc := Client.GetDocumentByPath(Path);
+  if Doc <> nil then Client.CloseDocument(Doc);
+end;
+
+function CopySymbol(SrcPath, SrcName : String; Dst : ISch_Lib; NewName, Desig : String) : ISch_Component;
+{ Builds a new symbol and copies the vendor's drawing into it piece by piece.
+  (Replicate on the whole component left the symbol empty in Altium 26.)
+  Altium sometimes shows a freshly opened vendor library as empty the first
+  time, so if nothing was found, the library is closed, opened again and
+  copied once more - the same as importing it a second time by hand. }
+var Src : ISch_Lib; C, N : ISch_Component; Tries, Count : Integer;
 begin
   Result := nil;
   NoteSource(SrcPath);
-  Src := OpenSchLib(SrcPath);
-  if Src = nil then Exit;
-  C := FindSchComponent(Src, SrcName);
-  if C = nil then Exit;
-  N := C.Replicate;
+  Count := 0;
+  Tries := 0;
+  N := SchServer.SchObjectFactory(eSchComponent, eCreate_Default);
+  while (Count = 0) and (Tries < 2) do
+  begin
+    Inc(Tries);
+    if Tries > 1 then CloseDocumentAt(SrcPath);
+    Src := OpenSchLib(SrcPath);
+    if Src = nil then Exit;
+    C := FindSchComponent(Src, SrcName);
+    if C = nil then Exit;
+    Count := CopyDrawing(C, N);
+  end;
+  if Count = 0 then Exit;  { reported as "symbol ... not found or empty" }
+  N.CurrentPartID := 1;
+  N.DisplayMode := 0;
+  try
+    N.PartCount := C.PartCount;
+    N.DisplayModeCount := C.DisplayModeCount;
+  except
+  end;
   N.LibReference := NewName;
+  N.Designator.Text := Desig;
   Dst.AddSchComponent(N);
+  Dst.GraphicallyInvalidate;
   Result := N;
+end;
+
+function IsEmptySymbol(C : ISch_Component) : Boolean;
+var It : ISch_Iterator;
+begin
+  It := C.SchIterator_Create;
+  It.AddFilter_ObjectSet(MkSet(ePin, eLine, ePolyline, ePolygon, eRectangle, eArc, eEllipse));
+  Result := It.FirstSchObject = nil;
+  C.SchIterator_Destroy(It);
+end;
+
+procedure RemoveDefaultComponents;
+{ A new .SchLib starts with an empty Component_1; remove it once real parts are in. }
+var I : Integer; Lib : ISch_Lib; C : ISch_Component;
+begin
+  for I := 0 to TouchedSch.Count - 1 do
+  begin
+    Lib := SchServer.GetSchDocumentByPath(TouchedSch[I]);
+    if Lib <> nil then
+    begin
+      C := FindSchComponent(Lib, 'Component_1');
+      if (C <> nil) and IsEmptySymbol(C) then Lib.RemoveSchComponent(C);
+    end;
+  end;
 end;
 
 procedure SetParameter(Comp : ISch_Component; Name, Value : String);
@@ -524,9 +596,10 @@ begin
       Comp := NewGenericSymbol(SchDst, Name, Kind);
     end
     else
-      Comp := CopySymbol(AbsPath(BlockValue(Block, 'SRC_SCHLIB')), BlockValue(Block, 'SRC_SYMBOL'), SchDst, Name);
+      Comp := CopySymbol(AbsPath(BlockValue(Block, 'SRC_SCHLIB')), BlockValue(Block, 'SRC_SYMBOL'), SchDst, Name,
+                         BlockValue(Block, 'DESIGNATOR'));
   end;
-  if Comp = nil then begin Result := 'symbol ' + BlockValue(Block, 'SRC_SYMBOL') + ' not found'; Exit; end;
+  if Comp = nil then begin Result := 'symbol ' + BlockValue(Block, 'SRC_SYMBOL') + ' not found or empty'; Exit; end;
   ApplyParameters(Comp, Block);
   LinkFootprint(Comp, FpName, DstPcb);
   Remember(TouchedSch, DstSch);
@@ -588,6 +661,7 @@ begin
     else if InPart or InFp then Block.Add(Line);
   end;
 
+  RemoveDefaultComponents;
   for I := 0 to TouchedPcb.Count - 1 do SaveDocument(TouchedPcb[I]);
   for I := 0 to TouchedSch.Count - 1 do SaveDocument(TouchedSch[I]);
   CloseSources;

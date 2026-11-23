@@ -79,6 +79,13 @@ CATEGORIES: dict[str, tuple[str, ...]] = {
 
 DEFAULT_CATEGORY = "Misc"
 
+# Reference designator prefix Altium shows on a new symbol, e.g. R? or U?.
+DESIGNATOR_PREFIX: dict[str, str] = {
+    "Capacitors": "C", "Capacitors Polarized": "C", "Resistors": "R", "Inductors": "L",
+    "Ferrite Beads": "FB", "Diodes": "D", "LEDs": "D", "Transistors": "Q", "ICs": "U",
+    "Power": "U", "Connectors": "J", "Crystals": "Y", "Misc": "U",
+}
+
 STAGES: tuple[str, ...] = ("Review", "Released", "Obsolete")
 
 MODEL_3D_STATES: tuple[str, ...] = ("Full", "Simple", "None")
