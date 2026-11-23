@@ -12,7 +12,7 @@ from rich.console import Console
 from rich.table import Table
 
 from . import fields as F
-from .config import HUNTING_MODES, default_library_path
+from .config import HUNTING_MODES, default_library_path, remember_library_path
 from .importer import ImportProblem, attach_step, import_zip
 from .library import Library
 from .passives import install_starter_pack
@@ -55,11 +55,16 @@ def init(starter: bool = typer.Option(True, help="Add the starter-pack passives.
     """Create the library folder with good defaults."""
     root = library_root()
     lib = Library.init(root)
+    if not _state["test"]:
+        remember_library_path(root)
     console.print(f"Library ready at [bold]{root}[/]")
     if starter:
         added, skipped = install_starter_pack(lib)
         console.print(f"Starter pack: {added} passives added, {skipped} already there.")
-    console.print("Next: run PartKit Sync in Altium to write the libraries (see docs/setup-guide.md).")
+    from .altium_launch import copy_scripts
+
+    console.print(f"Altium script copied to {copy_scripts().parent}")
+    console.print("Next: run [bold]partkit sync[/] to write the libraries into Altium.")
 
 
 @app.command("import")
@@ -68,7 +73,7 @@ def import_cmd(
     mpn: Optional[str] = typer.Option(None, help="Manufacturer part number, if the file name doesn't show it."),
     category: Optional[str] = typer.Option(None, help="One of: " + ", ".join(F.CATEGORIES)),
 ):
-    """Import a CAD zip (SnapMagic, SamacSys, Ultra Librarian, manufacturer) into Review."""
+    """Import a CAD download (.zip or .IntLib from SnapMagic, SamacSys, Ultra Librarian, manufacturer) into Review."""
     lib = open_lib()
     _check_category(category)
     try:
@@ -183,8 +188,10 @@ def check():
 
 
 @app.command()
-def sync():
-    """Prepare the job PartKit Sync runs inside Altium, and read back its last result."""
+def sync(start: bool = typer.Option(True, help="Ask Altium to run PartKit Sync automatically.")):
+    """Send approved parts to Altium (runs PartKit Sync), and read back the last result."""
+    from .altium_launch import copy_scripts, start_sync
+
     lib = open_lib()
     for m in lib.read_sync_result():
         console.print(m)
@@ -193,7 +200,34 @@ def sync():
         console.print("[green]Altium libraries are up to date.[/]")
         return
     console.print(f"Sync job written: {path}")
-    console.print("In Altium: File > Run Script > PartKitSync.PrjScr > Run (automatic start comes in a later version).")
+    prjscr = copy_scripts()
+    if start:
+        started, msg = start_sync(prjscr)
+        console.print(msg)
+    else:
+        console.print(f"In Altium: File > Run Script > Browse, choose {prjscr}, then pick Run.")
+    console.print("When Altium has finished, run [bold]partkit sync[/] again to record the result.")
+
+
+@app.command()
+def scripts():
+    """Copy the latest Altium script to Documents/PartKit Scripts and show where it is."""
+    from .altium_launch import copy_scripts
+
+    console.print(f"PartKit Sync script: {copy_scripts()}")
+
+
+@app.command()
+def gui():
+    """Open the PartKit window."""
+    try:
+        from .gui import main as gui_main
+    except ImportError:
+        console.print("[red]The window needs PySide6:[/] pip install \"partkit[gui] @ git+https://github.com/Ee0422/partkit\"")
+        raise typer.Exit(1)
+    if library_root() != default_library_path() or _state["test"]:
+        os.environ["PARTKIT_LIBRARY"] = str(library_root())
+    raise typer.Exit(gui_main([]))
 
 
 @app.command("set-target")

@@ -8,14 +8,15 @@ Altium libraries you choose, together with their 3D models. It also gives you a
 ready-made library of common resistors and capacitors, and makes sure every
 part carries the same BOM fields.
 
-> **Status: early development (milestone 1 of 6).** The engine and command line
-> work today. The desktop window, the installer and supplier search are coming
-> in later milestones. The Altium script (PartKit Sync) has not yet been tested
-> inside Altium. Please try it in Test mode and report what happens.
+> **Status: early development (milestone 2 of 6).** It has a desktop window, an
+> installer build, and starts the Altium script for you. PartKit Sync has synced the
+> 381-part starter pack in Altium Designer 26. Importing vendor zips into Altium is
+> being tested now. Supplier search comes in milestone 3.
 
 ## What it does
 
-- **Imports any CAD zip.** It finds the symbol, footprint and 3D model wherever
+- **Imports any CAD download.** Zips and single-file .IntLib downloads (SnapMagic)
+  both work. It finds the symbol, footprint and 3D model wherever
   they sit in the zip, including zips inside zips and mixed KiCad/Eagle/Altium
   bundles.
 - **Gives every footprint a 3D model.** If the model is already inside the
@@ -39,34 +40,40 @@ part carries the same BOM fields.
   kept in `Archive/`, so `partkit reimport` replays it without downloading
   again. `partkit undo` reverts a change.
 
-## Quick start (developer preview)
+## Install
 
-Requires Python 3.10+ on Windows. The installer comes in a later milestone and
-won't need Python.
+**Installer (recommended):** download `PartKit-Setup-<version>.exe` from
+[Releases](https://github.com/Ee0422/partkit/releases), run it, and click Next
+and Finish. No admin rights or Python are needed. PartKit opens on a one-screen
+setup: press **Start**.
+
+**From source (Python 3.10+):**
 
 ```powershell
-pip install git+https://github.com/Ee0422/partkit
-partkit --test init                    # test library with the starter pack
-partkit --test import "$HOME\Downloads\LIB_TPS62130RGTR.zip" --category Power
-partkit --test list --stage Review
-partkit --test approve TPS62130RGTR
-partkit --test sync                    # writes the job for Altium
+pip install "partkit[gui] @ git+https://github.com/Ee0422/partkit"
+partkit gui          # the window
+partkit --help       # the command line
 ```
 
-Then, in Altium: **File > Run Script**, open `altium-scripts/PartKitSync.PrjScr`
-and run `Run`. Back in PartKit, run `partkit --test sync` again to read the
-result.
+## Using it
 
-`partkit --test watch` imports every CAD zip as it lands in Downloads.
+1. **Import.** Drop CAD zips or .IntLib files on the window, or tick *Watch my Downloads folder*.
+2. **Review.** On the Library tab, check the part, set its category and click
+   **Approve**.
+3. **Send to Altium.** Click **Send to Altium**. PartKit starts PartKit Sync in
+   Altium, which writes the parts into your libraries. If Altium can't be
+   started automatically, PartKit tells you the one menu click to make instead.
+4. **Check.** The Health check tab lists BOM gaps and missing or simple 3D models.
 
-See [docs/setup-guide.md](docs/setup-guide.md) for the full guide.
+Use **Settings > Test mode** (or `partkit --test`) to try things on a
+throwaway library.
 
 ## Commands
 
 | Command | What it does |
 | --- | --- |
 | `init` | Create the library folder (and the starter pack) |
-| `import <zip>` | Import a CAD zip into Review |
+| `import <file>` | Import a CAD zip or .IntLib into Review |
 | `reimport <name>` | Import a zip again from the Archive folder |
 | `attach-3d <mpn> <step>` | Attach or replace a part's 3D model |
 | `watch` | Auto-import CAD downloads from Downloads |
@@ -75,15 +82,17 @@ See [docs/setup-guide.md](docs/setup-guide.md) for the full guide.
 | `obsolete <mpn>` | Mark a part obsolete |
 | `undo <mpn>` | Undo the last change to a part |
 | `check` | Health check: BOM gaps, missing files, Simple or missing 3D models |
-| `sync` | Write the job for PartKit Sync in Altium and read its result |
+| `sync` | Send approved parts to Altium (starts PartKit Sync) and read the last result |
+| `scripts` | Copy the latest Altium script to Documents\PartKit Scripts |
+| `gui` | Open the window |
 | `set-target <category> <schlib> <pcblib>` | Choose the libraries a category goes into |
 | `set-hunting off/ask/always` | Hunt beyond your preferred providers only when they can't find a part |
 | `test-reset` | Reset the test library (with `--test`) |
 
 ## Roadmap
 
-1. Library core and import (this release)
-2. Desktop window, signed installer, automatic start of PartKit Sync
+1. Library core and import
+2. Desktop window, installer, automatic start of PartKit Sync (this release; code signing to follow)
 3. Supplier search (DigiKey, Mouser, Farnell), provider preferences, hunting
 4. Passive picker and more starter packs
 5. Library screen and full health check

@@ -19,8 +19,25 @@ DEFAULT_PROVIDERS = ["SnapMagic", "SamacSys", "Manufacturer", "UltraLibrarian"]
 HUNTING_MODES = ("off", "ask", "always")
 
 
+LOCATION_FILE = Path.home() / ".partkit-library-location"
+
+
 def default_library_path() -> Path:
+    """The library folder chosen in setup, or Documents/PartKit Library."""
+    try:
+        saved = LOCATION_FILE.read_text(encoding="utf-8").strip()
+        if saved:
+            return Path(saved)
+    except OSError:
+        pass
     return Path.home() / "Documents" / "PartKit Library"
+
+
+def remember_library_path(path: Path) -> None:
+    try:
+        LOCATION_FILE.write_text(str(Path(path).resolve()), encoding="utf-8")
+    except OSError:
+        pass
 
 
 def default_downloads_path() -> Path:

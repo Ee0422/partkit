@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from .importer import ImportProblem, attach_step, guess_mpn_from_name, import_zip, looks_like_cad_download, STEP_EXT
+from .importer import ImportProblem, attach_step, guess_mpn_from_name, import_zip, looks_like_cad_download, DOWNLOAD_EXT, STEP_EXT
 from .library import Library
 
 PARTIAL_SUFFIXES = (".crdownload", ".part", ".tmp", ".download")
@@ -58,7 +58,7 @@ def watch(lib: Library, folder: Path, report: Callable[[str], None] = print) -> 
             if p in seen:
                 return
             path = Path(p)
-            if path.suffix.lower() not in {".zip"} | STEP_EXT:
+            if path.suffix.lower() not in DOWNLOAD_EXT:
                 return
             seen.add(p)
             if wait_until_complete(path):

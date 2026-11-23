@@ -34,6 +34,9 @@ REQUIRED_FOR_BOM: tuple[str, ...] = (
 )
 
 # Common misspellings found in vendor libraries, mapped to the standard name.
+# Vendor parameters that are only links back to the vendor's site; kept out of the BOM.
+VENDOR_LINK_FIELDS = {"snapeda_link", "check_prices", "snapmagic_link", "ul_link"}
+
 FIELD_ALIASES: dict[str, str] = {
     "mpn": "Manufacturer Part Number",
     "manufacturer_part_number": "Manufacturer Part Number",
@@ -41,6 +44,7 @@ FIELD_ALIASES: dict[str, str] = {
     "mfr part number": "Manufacturer Part Number",
     "mfr. part #": "Manufacturer Part Number",
     "part number": "Manufacturer Part Number",
+    "mp": "Manufacturer Part Number",
     "mf": "Manufacturer",
     "mfr": "Manufacturer",
     "manufacturer 1": "Manufacturer",
@@ -105,4 +109,6 @@ def display_name(params: dict[str, str], category: str) -> str:
                 params.get("Power"), params.get("Size")]
     else:
         bits = [params.get("Manufacturer Part Number")]
+    if len([b for b in bits if b]) < 2 and category in ("Capacitors", "Resistors"):
+        return ""  # no spec known yet: a bare "R" or "C" would clash, so the MPN is used instead
     return " ".join(b for b in bits if b)

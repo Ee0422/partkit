@@ -18,16 +18,20 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+gui = ["PySide6>=6.5"]
+dev = ["pytest>=8", "PySide6>=6.5"]
 
 [project.scripts]
 partkit = "partkit.cli:app"
+
+[project.gui-scripts]
+partkit-gui = "partkit.gui:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-partkit = ["data/*.json"]
+partkit = ["data/*.json", "altium/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

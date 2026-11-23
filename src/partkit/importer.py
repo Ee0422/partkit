@@ -15,13 +15,15 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
 from . import fields as F
-from .altium_files import PcbLibInfo, SchLibInfo, embedded_models, pcblib_info, schlib_info
+from .altium_files import PcbLibInfo, SchLibInfo, embedded_models, extract_intlib_file, pcblib_info, schlib_info
 from .library import Library, Part, safe_name
 
 MAX_NESTING = 3
 MAX_TOTAL_BYTES = 500 * 1024 * 1024  # refuse zip bombs
 
 STEP_EXT = {".step", ".stp"}
+INTLIB_EXT = {".intlib"}
+DOWNLOAD_EXT = {".zip"} | INTLIB_EXT | STEP_EXT  # files the watcher and window accept
 CAD_EXT = {".schlib", ".pcblib", ".intlib"} | STEP_EXT
 
 _PREFIXES = re.compile(r"^(lib_|ul_|ul-|snapeda_|snapmagic_|samacsys_)", re.IGNORECASE)
@@ -167,7 +169,7 @@ def _vendor_params(info: SchLibInfo | None, symbol: str) -> dict[str, str]:
     raw = info.parameters.get(symbol) or (next(iter(info.parameters.values())) if info.parameters else {})
     out = {}
     for k, v in raw.items():
-        if v and v != "*":
+        if v and v != "*" and k.strip().lower() not in F.VENDOR_LINK_FIELDS:
             out[F.normalise_field(k)] = v
     return out
 
@@ -178,8 +180,24 @@ def import_zip(lib: Library, zip_path: Path, mpn: str | None = None, category: s
     messages: list[str] = []
     with tempfile.TemporaryDirectory(prefix="partkit-") as tmp:
         work = Path(tmp)
-        extract_all(zip_path, work)
+        if zip_path.suffix.lower() in INTLIB_EXT:  # e.g. SnapMagic's single-file Altium download
+            shutil.copy2(zip_path, work / zip_path.name)
+        else:
+            extract_all(zip_path, work)
         found = scan(work)
+        if found.intlibs and not (found.schlibs and found.pcblibs):
+            for i, il in enumerate(found.intlibs):
+                try:
+                    extract_intlib_file(il, work / "_intlib" / str(i))
+                except Exception as e:  # noqa: BLE001 - explain instead of crashing
+                    messages.append(f"Could not unpack {il.name} ({e}).")
+            found = scan(work)
+            found.intlibs = []
+            if not (found.schlibs or found.pcblibs):
+                raise ImportProblem(
+                    f"PartKit couldn't unpack the integrated library in {zip_path.name}. In Altium, open it "
+                    "and choose Extract Sources, or download the part again in the Altium .SchLib/.PcbLib format."
+                )
         provider = detect_provider(zip_path.name, found)
 
         if not found.has_altium:
@@ -223,12 +241,19 @@ def import_zip(lib: Library, zip_path: Path, mpn: str | None = None, category: s
         if p_info and len(p_info.footprints) > 1:
             messages.append(f"{pcblib.name} holds {len(p_info.footprints)} footprints; using {footprint!r}.")
 
+        if provider == "Manufacturer/other" and s_info:
+            keys = " ".join(k.lower() for ps in s_info.parameters.values() for k in ps)
+            if "snapeda" in keys or "snapmagic" in keys:
+                provider = "SnapMagic"
         params = _vendor_params(s_info, symbol)
         mpn = (mpn or params.get("Manufacturer Part Number") or guess_mpn_from_name(zip_path.name)
                or symbol or zip_path.stem).strip()
         params["Manufacturer Part Number"] = mpn
 
         existing = lib.get(mpn)
+        if existing and existing.source == "PartKit":
+            messages.append(f"{mpn} is already in your starter pack. After approval, these vendor files "
+                            "replace the generic symbol and footprint.")
         part = existing or Part(mpn=mpn)
         if category:
             part.category = category
@@ -324,7 +349,7 @@ def attach_step(lib: Library, mpn: str, step: Path, provider: str = "manual") ->
 def looks_like_cad_download(path: Path) -> bool:
     """Cheap check used by the Downloads watcher before importing."""
     path = Path(path)
-    if path.suffix.lower() in STEP_EXT:
+    if path.suffix.lower() in STEP_EXT | INTLIB_EXT:
         return True
     if path.suffix.lower() != ".zip":
         return False

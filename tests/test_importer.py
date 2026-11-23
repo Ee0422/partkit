@@ -107,3 +107,59 @@ def test_embedded_model_also_saved_as_step(lib, fake_altium, tmp_path):
     p = import_zip(lib, z, mpn="Q1").part
     assert p.model_3d_source == "embedded" and p.step == "3D/Q1.step"
     assert (lib.root / p.step).read_bytes().startswith(b"ISO-10303-21")
+
+
+# ---------------- .IntLib (SnapMagic single-file downloads) ----------------
+
+from partkit import altium_files as AF
+from conftest import FakeOle
+
+
+def test_extract_intlib_recognises_contents_not_names():
+    import zlib
+
+    sch = AF.OLE_MAGIC + b"sch"
+    pcb = AF.OLE_MAGIC + b"pcb"
+    inner = {
+        sch: FakeOle({("FileHeader",): b"|HEADER=Protel for Windows - Schematic Library Editor Binary File"}),
+        pcb: FakeOle({("FileHeader",): b"PCB 6.0 Binary Library File"}),
+    }
+    ole = FakeOle({
+        ("SchLib", "0"): zlib.compress(sch + b"\x00" * 32),
+        ("PCBLib", "0"): b"\x10\x00\x00\x00" + zlib.compress(pcb + b"\x00" * 32),
+        ("PCB3DLib", "0"): zlib.compress(b"ISO-10303-21;\nHEADER;" + b" " * 32),
+        ("Version.Txt",): b"Version=1.1" + b" " * 16,
+    })
+    got = AF.extract_intlib(ole, open_bytes=lambda d: inner[d[: len(sch)]])
+    assert sorted(k for k, _ in got) == ["pcblib", "schlib", "step"]
+
+
+def test_import_intlib_file(tmp_path, lib, fake_altium, monkeypatch):
+    from partkit import importer
+
+    def fake_extract(path, dest):
+        dest.mkdir(parents=True)
+        (dest / "a.SchLib").write_bytes(b"SYM:RES;MPN:RC0603FR-071KL")
+        (dest / "a.PcbLib").write_bytes(b"FP:RESC1608X55N;MODELS:1")
+        return [dest / "a.SchLib", dest / "a.PcbLib"]
+
+    monkeypatch.setattr(importer, "extract_intlib_file", fake_extract)
+    f = tmp_path / "RC0603FR-071KL.IntLib"
+    f.write_bytes(b"intlib")
+    assert importer.looks_like_cad_download(f)
+    res = importer.import_zip(lib, f)
+    assert res.part.mpn == "RC0603FR-071KL"
+    assert res.part.schlib.endswith(".SchLib") and res.part.pcblib.endswith(".PcbLib")
+    assert res.part.model_3d_source == "embedded"
+    assert (lib.root / "Archive" / f.name).exists()
+
+
+def test_unreadable_intlib_explains(tmp_path, lib, fake_altium, monkeypatch):
+    import pytest
+    from partkit import importer
+
+    monkeypatch.setattr(importer, "extract_intlib_file", lambda p, d: [])
+    f = tmp_path / "X.IntLib"
+    f.write_bytes(b"intlib")
+    with pytest.raises(importer.ImportProblem, match="Extract Sources"):
+        importer.import_zip(lib, f)
