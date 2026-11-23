@@ -207,18 +207,55 @@ begin
   Result := C;
 end;
 
+function CopyDrawing(C, N : ISch_Component) : Integer;
+{ copies every pin, line, shape and label of C into N; returns how many }
+var It : ISch_Iterator; P : ISch_GraphicalObject;
+begin
+  Result := 0;
+  It := C.SchIterator_Create;
+  It.AddFilter_ObjectSet(MkSet(ePin, eLine, ePolyline, ePolygon, eRectangle, eRoundRectangle,
+    eArc, eEllipticalArc, eEllipse, ePie, eBezier, eLabel, eTextFrame, eImage));
+  P := It.FirstSchObject;
+  while P <> nil do
+  begin
+    N.AddSchObject(P.Replicate);
+    Inc(Result);
+    P := It.NextSchObject;
+  end;
+  C.SchIterator_Destroy(It);
+end;
+
+procedure CloseDocumentAt(Path : String);
+var Doc : IServerDocument;
+begin
+  Doc := Client.GetDocumentByPath(Path);
+  if Doc <> nil then Client.CloseDocument(Doc);
+end;
+
 function CopySymbol(SrcPath, SrcName : String; Dst : ISch_Lib; NewName, Desig : String) : ISch_Component;
 { Builds a new symbol and copies the vendor's drawing into it piece by piece.
-  (Replicate on the whole component left the symbol empty in Altium 26.) }
-var Src : ISch_Lib; C, N : ISch_Component; It : ISch_Iterator; P, Q : ISch_GraphicalObject;
+  (Replicate on the whole component left the symbol empty in Altium 26.)
+  Altium sometimes shows a freshly opened vendor library as empty the first
+  time, so if nothing was found, the library is closed, opened again and
+  copied once more - the same as importing it a second time by hand. }
+var Src : ISch_Lib; C, N : ISch_Component; Tries, Count : Integer;
 begin
   Result := nil;
   NoteSource(SrcPath);
-  Src := OpenSchLib(SrcPath);
-  if Src = nil then Exit;
-  C := FindSchComponent(Src, SrcName);
-  if C = nil then Exit;
+  Count := 0;
+  Tries := 0;
   N := SchServer.SchObjectFactory(eSchComponent, eCreate_Default);
+  while (Count = 0) and (Tries < 2) do
+  begin
+    Inc(Tries);
+    if Tries > 1 then CloseDocumentAt(SrcPath);
+    Src := OpenSchLib(SrcPath);
+    if Src = nil then Exit;
+    C := FindSchComponent(Src, SrcName);
+    if C = nil then Exit;
+    Count := CopyDrawing(C, N);
+  end;
+  if Count = 0 then Exit;  { reported as "symbol ... not found or empty" }
   N.CurrentPartID := 1;
   N.DisplayMode := 0;
   try
@@ -228,18 +265,8 @@ begin
   end;
   N.LibReference := NewName;
   N.Designator.Text := Desig;
-  It := C.SchIterator_Create;
-  It.AddFilter_ObjectSet(MkSet(ePin, eLine, ePolyline, ePolygon, eRectangle, eRoundRectangle,
-    eArc, eEllipticalArc, eEllipse, ePie, eBezier, eLabel, eTextFrame, eImage));
-  P := It.FirstSchObject;
-  while P <> nil do
-  begin
-    Q := P.Replicate;
-    N.AddSchObject(Q);
-    P := It.NextSchObject;
-  end;
-  C.SchIterator_Destroy(It);
   Dst.AddSchComponent(N);
+  Dst.GraphicallyInvalidate;
   Result := N;
 end;
 
@@ -572,7 +599,7 @@ begin
       Comp := CopySymbol(AbsPath(BlockValue(Block, 'SRC_SCHLIB')), BlockValue(Block, 'SRC_SYMBOL'), SchDst, Name,
                          BlockValue(Block, 'DESIGNATOR'));
   end;
-  if Comp = nil then begin Result := 'symbol ' + BlockValue(Block, 'SRC_SYMBOL') + ' not found'; Exit; end;
+  if Comp = nil then begin Result := 'symbol ' + BlockValue(Block, 'SRC_SYMBOL') + ' not found or empty'; Exit; end;
   ApplyParameters(Comp, Block);
   LinkFootprint(Comp, FpName, DstPcb);
   Remember(TouchedSch, DstSch);
