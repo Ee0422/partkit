@@ -40,7 +40,10 @@ project uses.
   files for, with the symbol copied from any part you choose.
 - **Projects.** Each board gets a project with its own parts list, started empty,
   from templates (groups such as "USB-C power input") or as a copy of another
-  project. Add more parts any time with *Add to project*. Tick *own library* and
+  project. Add more parts any time with *Add to project*. Choose a *project library
+  folder* and the project gets its own library there: if the folder already has
+  a .SchLib and .PcbLib (your board's existing library), PartKit adds to those,
+  whatever they're called; if not, it makes new ones named after the project.
   *Update project library* writes only the parts the project's library doesn't
   have yet. The starting parts list saves as a CSV for Excel; the real BOM comes
   from Altium once the schematic is done.
@@ -101,7 +104,8 @@ partkit --help       # the command line
    part** or **New part from this footprint**. Pick the supplier part yourself;
    PartKit warns if its package doesn't match the footprint.
 7. **Projects.** On *Projects*, make a project, add parts from *My parts* with
-   **Add to project**, and (optionally) give it its own library.
+   **Add to project**, and (optionally) choose its library folder, such as the
+   folder of your Altium project that already has its .SchLib and .PcbLib.
 
 Use **Settings > Test mode** (or `partkit --test`) to try things on a
 throwaway library.
@@ -132,7 +136,7 @@ throwaway library.
 | `new-value <part> --value 4.7k` | New value with the same checked symbol, footprint and 3D (or `--mpn` for other parts) |
 | `new-from-footprint <part> <mpn> [--symbol-from <part>]` | New part on a checked footprint |
 | `favourite <mpn> [--off]` | Star a part |
-| `project new <name> [--template T] [--own-library]` | Make a project |
+| `project new <name> [--template T] [--folder F]` | Make a project; with `--folder`, it uses the libraries already in F (`--schlib`/`--pcblib` if several) |
 | `project add <name> <mpn>...` | Add parts to one project |
 | `project show <name> [--out file.csv]` | A project's parts and starting parts list |
 | `project update <name> [--all]` | Write only the new parts into the project's own library |

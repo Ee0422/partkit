@@ -74,3 +74,39 @@ def test_copy_of_project(lib):
     projects.add_parts(lib, "A", ["10K"])
     b = projects.create(lib, "B", copy_of="A")
     assert [it.mpn for it in b.items] == ["10K"] and Library(lib.root).get("10K")
+
+
+def test_project_uses_the_libraries_already_in_its_folder(lib, tmp_path):
+    ready(lib, "10K")
+    stm = tmp_path / "STM32 board"
+    stm.mkdir()
+    (stm / "STM32.SchLib").write_bytes(b"x")
+    (stm / "STM32.PcbLib").write_bytes(b"x")
+    proj = projects.create(lib, "STM32 board v2", folder=str(stm))
+    assert proj.own_library and proj.schlib == str(stm / "STM32.SchLib") and proj.pcblib == str(stm / "STM32.PcbLib")
+    projects.add_parts(lib, proj.name, ["10K"])
+    job, _ = projects.write_update_job(lib, projects.get(lib, proj.name))
+    text = job.read_text(encoding="utf-8-sig")
+    assert f"DST_SCHLIB={stm / 'STM32.SchLib'}" in text and f"DST_PCBLIB={stm / 'STM32.PcbLib'}" in text
+
+
+def test_empty_folder_gets_libraries_named_after_the_project(lib, tmp_path):
+    proj = projects.create(lib, "Motor", folder=str(tmp_path))
+    assert proj.schlib == str(tmp_path / "Motor.SchLib") and proj.pcblib == str(tmp_path / "Motor.PcbLib")
+
+
+def test_folder_with_several_libraries_needs_a_choice(lib, tmp_path):
+    for n in ("A.SchLib", "B.SchLib", "A.PcbLib"):
+        (tmp_path / n).write_bytes(b"x")
+    with pytest.raises(ValueError, match="2 .SchLib"):
+        projects.create(lib, "X", folder=str(tmp_path))
+    assert projects.get(lib, "X") is None
+    proj = projects.create(lib, "X", folder=str(tmp_path), schlib="B.SchLib")
+    assert proj.schlib.endswith("B.SchLib") and proj.pcblib.endswith("A.PcbLib")
+
+
+def test_moving_a_project_library_sends_everything_again(lib, tmp_path):
+    proj = projects.create(lib, "M", own_library=True)
+    proj.in_library = ["10K"]
+    projects.use_folder(proj, tmp_path)
+    assert proj.in_library == [] and proj.schlib_file == ""

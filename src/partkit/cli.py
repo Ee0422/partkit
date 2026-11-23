@@ -496,17 +496,22 @@ app.add_typer(project_app, name="project")
 @project_app.command("new")
 def project_new(name: str, template: list[str] = typer.Option([], "--template", help="Start from this template (repeat)"),
                 copy_of: str = typer.Option("", "--copy-of", help="Start as a copy of another project"),
-                own_library: bool = typer.Option(False, "--own-library", help="Give it its own .SchLib/.PcbLib")):
+                own_library: bool = typer.Option(False, "--own-library", help="Give it its own .SchLib/.PcbLib"),
+                folder: Optional[Path] = typer.Option(None, "--folder", file_okay=False,
+                                                      help="Its library folder; the .SchLib/.PcbLib already there are used"),
+                schlib: str = typer.Option("", "--schlib", help="Which .SchLib, if the folder has several"),
+                pcblib: str = typer.Option("", "--pcblib", help="Which .PcbLib, if the folder has several")):
     """Make a project: empty, from templates, or as a copy of another project."""
     from . import projects
 
     try:
-        p = projects.create(open_lib(), name, templates=template, copy_of=copy_of, own_library=own_library)
+        p = projects.create(open_lib(), name, templates=template, copy_of=copy_of, own_library=own_library,
+                            folder=str(folder) if folder else "", schlib=schlib, pcblib=pcblib)
     except (ValueError, KeyError) as e:
         console.print(f"[red]{e.args[0]}[/]")
         raise typer.Exit(1)
     console.print(f"Project '{p.name}' made with {len(p.items)} parts."
-                  + (f" Its library goes in {p.folder}" if p.own_library else ""))
+                  + (f" Its library: {p.schlib} and {p.pcblib}" if p.own_library else ""))
 
 
 @project_app.command("list")

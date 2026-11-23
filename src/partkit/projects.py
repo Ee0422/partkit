@@ -2,9 +2,11 @@
 
 A project starts empty, from templates (kits), or as a copy of another
 project. Adding a part to a project adds it to that project only. By
-default a project uses your main library. Tick "own library" and PartKit
-writes the project's parts into the project's own .SchLib/.PcbLib, and
-"Update project library" sends only the parts it doesn't have yet.
+default a project uses your main library. Choose a library folder and
+PartKit writes the project's parts into that folder's .SchLib/.PcbLib (the
+ones already there, whatever they're called, or new ones named after the
+project), and "Update project library" sends only the parts it doesn't
+have yet.
 """
 
 from __future__ import annotations
@@ -29,14 +31,16 @@ class Project:
     folder: str = ""                 # where the project's own library lives
     in_library: list[str] = field(default_factory=list)  # MPNs already written there
     templates: list[str] = field(default_factory=list)   # the templates it started from
+    schlib_file: str = ""            # file names inside folder; "" = named after the project
+    pcblib_file: str = ""
 
     @property
     def schlib(self) -> str:
-        return str(Path(self.folder) / f"{_safe(self.name)}.SchLib")
+        return str(Path(self.folder) / (self.schlib_file or f"{_safe(self.name)}.SchLib"))
 
     @property
     def pcblib(self) -> str:
-        return str(Path(self.folder) / f"{_safe(self.name)}.PcbLib")
+        return str(Path(self.folder) / (self.pcblib_file or f"{_safe(self.name)}.PcbLib"))
 
     def has(self, mpn: str) -> bool:
         return any(it.mpn == mpn for it in self.items)
@@ -94,16 +98,56 @@ def default_folder(lib: Library, name: str) -> str:
     return str(lib.root / "Projects" / _safe(name))
 
 
+def libraries_in(folder: str | Path) -> tuple[list[str], list[str]]:
+    """The .SchLib and .PcbLib file names already in a folder (not its subfolders)."""
+    d = Path(folder)
+    if not d.is_dir():
+        return [], []
+    files = sorted(p.name for p in d.iterdir() if p.is_file())
+    return ([f for f in files if f.lower().endswith(".schlib")],
+            [f for f in files if f.lower().endswith(".pcblib")])
+
+
+def use_folder(proj: Project, folder: str | Path, schlib: str = "", pcblib: str = "") -> Project:
+    """Point a project at a library folder.
+
+    If the folder holds exactly one .SchLib (or .PcbLib), that file is used whatever it's
+    called. With none, a new one named after the project is made there. With several, pass
+    the one to use, or ValueError says which to choose from.
+    """
+    schs, pcbs = libraries_in(folder)
+    chosen = []
+    for kind, given, found in (("SchLib", schlib, schs), ("PcbLib", pcblib, pcbs)):
+        if given:
+            chosen.append(Path(given).name)
+        elif len(found) == 1:
+            chosen.append(found[0])
+        elif not found:
+            chosen.append("")
+        else:
+            raise ValueError(f"{folder} has {len(found)} .{kind} files ({', '.join(found)}). Choose one.")
+    proj.folder = str(folder)
+    proj.schlib_file, proj.pcblib_file = chosen
+    proj.own_library = True
+    proj.in_library = []  # PartKit doesn't know what's in a library it hasn't written; send everything once
+    return proj
+
+
 def create(lib: Library, name: str, templates: list[str] | None = None, copy_of: str = "",
-           own_library: bool = False, folder: str = "") -> Project:
-    """A new project, empty, from templates, or as a copy of another project's parts list."""
+           own_library: bool = False, folder: str = "", schlib: str = "", pcblib: str = "") -> Project:
+    """A new project, empty, from templates, or as a copy of another project's parts list.
+
+    Give a folder to have the project use its own library there (see use_folder).
+    """
     name = name.strip()
     if not name:
         raise ValueError("A project needs a name.")
     if get(lib, name):
         raise ValueError(f"There's already a project called {name!r}.")
-    proj = Project(name, own_library=own_library, folder=folder or default_folder(lib, name),
+    proj = Project(name, own_library=own_library, folder=default_folder(lib, name),
                    templates=list(templates or []))
+    if folder:
+        use_folder(proj, folder, schlib, pcblib)
     if copy_of:
         src = get(lib, copy_of)
         if src is None:

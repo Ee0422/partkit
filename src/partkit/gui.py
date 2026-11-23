@@ -308,14 +308,31 @@ class NewProjectDialog(QDialog):
         self.copy = QComboBox()
         self.copy.addItems(projects)
         form.addRow("Copy of", self.copy)
-        self.own = QCheckBox("Give this project its own library (you can change this later)")
-        form.addRow(self.own)
+        row = QHBoxLayout()
+        self.lib_folder = QLineEdit()
+        self.lib_folder.setReadOnly(True)
+        self.lib_folder.setPlaceholderText("Empty: use my main library")
+        self.lib_folder.setToolTip("Choose the folder of this board's own .SchLib/.PcbLib.\n"
+                                   "If it already has them, PartKit adds parts to those files.\n"
+                                   "If not, PartKit makes new ones named after the project.")
+        choose = QPushButton("Choose…")
+        choose.clicked.connect(self._choose_folder)
+        clear = QPushButton("Clear")
+        clear.clicked.connect(self.lib_folder.clear)
+        for wdg in (self.lib_folder, choose, clear):
+            row.addWidget(wdg)
+        form.addRow("Project library folder", row)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         form.addRow(buttons)
         self.start.currentTextChanged.connect(self._mode)
         self._mode()
+
+    def _choose_folder(self):
+        d = QFileDialog.getExistingDirectory(self, "Folder of this project's library", self.lib_folder.text())
+        if d:
+            self.lib_folder.setText(d)
 
     def _mode(self, *_):
         self.tpl.setEnabled(self.start.currentText() == "From templates")
@@ -928,7 +945,7 @@ class MainWindow(QMainWindow):
                                 "On: PartKit writes this project's parts into its own .SchLib/.PcbLib too.")
         self.own_lib.toggled.connect(self.toggle_own_library)
         self.proj_folder = QLabel("")
-        folder_btn = QPushButton("Change folder…")
+        folder_btn = QPushButton("Choose library folder…")
         folder_btn.clicked.connect(self.change_project_folder)
         self.update_lib_btn = QPushButton("Update project library")
         self.update_lib_btn.setToolTip("Writes only the parts the project library doesn't have yet.")
@@ -1018,7 +1035,11 @@ class MainWindow(QMainWindow):
                 wdg.setVisible(proj.own_library)
             ready, _ = projects.missing_from_library(self.lib, proj)
             self.update_lib_btn.setText(f"Update project library ({len(ready)} new)")
-            self.proj_folder.setText(proj.folder)
+            sch, pcb = Path(proj.schlib), Path(proj.pcblib)
+            new = [p.name for p in (sch, pcb) if not p.exists()]
+            self.proj_folder.setText(f"{sch.name} + {pcb.name}" + (" (new)" if new else ""))
+            self.proj_folder.setToolTip(f"{sch}\n{pcb}" + (f"\nPartKit makes {', '.join(new)} on the first update."
+                                                            if new else ""))
             self.kit_title.setText(f"Project '{proj.name}': {len(rows)} parts. Add more from My parts with "
                                    "'Add to project…'.")
         elif len(names) > 1:
@@ -1036,9 +1057,13 @@ class MainWindow(QMainWindow):
                              [p.name for p in projects.projects(self.lib)])
         if d.exec() != QDialog.Accepted:
             return
+        folder = d.lib_folder.text().strip()
+        files = self._choose_libraries(folder) if folder else ("", "")
+        if files is None:
+            return
         try:
             proj = projects.create(self.lib, d.name.text(), templates=d.templates(), copy_of=d.copy_of(),
-                                   own_library=d.own.isChecked())
+                                   folder=folder, schlib=files[0], pcblib=files[1])
         except (ValueError, KeyError) as e:
             QMessageBox.information(self, "PartKit", str(e.args[0]))
             return
@@ -1131,18 +1156,41 @@ class MainWindow(QMainWindow):
             projects.save(self.lib, proj)
             self.show_kit()
 
+    def _choose_libraries(self, folder: str):
+        """(schlib, pcblib) file names to use in a folder, asking only when it has several; None if cancelled."""
+        from PySide6.QtWidgets import QInputDialog
+
+        from . import projects
+
+        schs, pcbs = projects.libraries_in(folder)
+        out = []
+        for kind, found in (("SchLib", schs), ("PcbLib", pcbs)):
+            if len(found) <= 1:
+                out.append(found[0] if found else "")
+                continue
+            name, ok = QInputDialog.getItem(self, "PartKit", f"This folder has several .{kind} files. "
+                                            "Which one is this project's?", found, 0, False)
+            if not ok:
+                return None
+            out.append(name)
+        return tuple(out)
+
     def change_project_folder(self):
         from . import projects
 
         proj = self._chosen_project()
         if not proj:
             return
-        d = QFileDialog.getExistingDirectory(self, "Folder for the project library", proj.folder)
-        if d:
-            proj.folder = d
-            proj.in_library = []  # a new place starts empty
-            projects.save(self.lib, proj)
-            self.show_kit()
+        d = QFileDialog.getExistingDirectory(self, "Folder of this project's library", proj.folder)
+        if not d:
+            return
+        files = self._choose_libraries(d)
+        if files is None:
+            return
+        projects.use_folder(proj, d, *files)
+        projects.save(self.lib, proj)
+        self.show_kit()
+        self.log(f"Project '{proj.name}' now uses {proj.schlib} and {proj.pcblib}.")
 
     def update_project_library(self, everything: bool = False):
         from . import projects

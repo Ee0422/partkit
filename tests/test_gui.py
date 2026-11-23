@@ -290,3 +290,28 @@ def test_send_button_counts_changes(win):
     win.lib.save(Part(mpn="Z1", stage="Ready", needs_sync=True))
     win.refresh_library()
     assert win.sync_btn.text() == "Send 1 change to Altium"
+
+
+def test_new_project_dialog_picks_existing_library_folder(win, monkeypatch, tmp_path):
+    from partkit import projects
+
+    (tmp_path / "STM32.SchLib").write_bytes(b"x")
+    (tmp_path / "STM32.PcbLib").write_bytes(b"x")
+    (tmp_path / "Old.PcbLib").write_bytes(b"x")
+    real = gui.NewProjectDialog
+
+    def fake_dialog(*a):
+        d = real(*a)
+        d.name.setText("Board")
+        d.lib_folder.setText(str(tmp_path))
+        d.exec = lambda: gui.QDialog.Accepted
+        return d
+
+    monkeypatch.setattr(gui, "NewProjectDialog", fake_dialog)
+    from PySide6.QtWidgets import QInputDialog
+
+    monkeypatch.setattr(QInputDialog, "getItem", staticmethod(lambda *a, **k: ("STM32.PcbLib", True)))
+    win.new_project()
+    proj = projects.get(win.lib, "Board")
+    assert proj.own_library and proj.schlib.endswith("STM32.SchLib") and proj.pcblib.endswith("STM32.PcbLib")
+    assert "STM32.SchLib + STM32.PcbLib" == win.proj_folder.text()
