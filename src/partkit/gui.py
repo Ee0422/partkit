@@ -196,9 +196,9 @@ class MainWindow(QMainWindow):
         add.clicked.connect(self.add_result)
         cad = QPushButton("Get CAD files")
         cad.setToolTip("Opens your first preferred provider; your download is imported automatically")
-        cad.clicked.connect(lambda: self.get_cad(next_=False))
+        cad.clicked.connect(self.get_cad_first)
         self.next_btn = QPushButton("Not there? Try next provider")
-        self.next_btn.clicked.connect(lambda: self.get_cad(next_=True))
+        self.next_btn.clicked.connect(self.get_cad_next)
         self.next_btn.setEnabled(False)
         page = QPushButton("Open supplier page")
         page.clicked.connect(self.open_supplier_page)
@@ -268,6 +268,13 @@ class MainWindow(QMainWindow):
         cat = self.add_cat.currentText()
         part = add_from_search(self.lib, mpn, offers, category=None if cat.startswith("Let") else cat)
         self.log(f"{part.mpn} added to Review as {part.category}. Click 'Get CAD files' next.")
+
+    # bound methods, not lambdas: a lambda holding the window keeps it alive past Qt's shutdown
+    def get_cad_first(self):
+        self.get_cad(next_=False)
+
+    def get_cad_next(self):
+        self.get_cad(next_=True)
 
     def get_cad(self, next_: bool):
         from .providers import cad_sources, open_source
