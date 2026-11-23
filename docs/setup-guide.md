@@ -5,7 +5,7 @@ and 2 in a later milestone.
 
 ## 1. Install
 
-1. Install Python 3.12 from python.org and tick "Add python.exe to PATH".
+1. Install Python 3.10 or newer from python.org and tick "Add python.exe to PATH".
 2. Open PowerShell and run:
 
    ```powershell
