@@ -33,7 +33,7 @@ def safe_name(mpn: str) -> str:
 class Part:
     mpn: str
     category: str = F.DEFAULT_CATEGORY
-    stage: str = "Review"
+    stage: str = F.TO_CHECK
     params: dict[str, str] = field(default_factory=dict)
     source: str = "unknown"            # SnapMagic, SamacSys, UltraLibrarian, PartKit, ...
     schlib: str = ""                   # path relative to library root
@@ -51,6 +51,9 @@ class Part:
     copied_from: str = ""              # MPN whose checked symbol/footprint this part reuses
     notes: list[str] = field(default_factory=list)
     updated: float = 0.0
+
+    def __post_init__(self):
+        self.stage = F.OLD_STAGE_NAMES.get(self.stage, self.stage)
 
     def bom_params(self) -> dict[str, str]:
         """Every parameter written onto the Altium symbol, standard names first."""
@@ -192,7 +195,7 @@ class Library:
         if not (part.symbol and part.footprint):
             raise KeyError(f"{mpn} has no symbol or footprint yet. Get its CAD files first "
                            "(Search > Get CAD files, or import a download).")
-        part.stage = "Released"
+        part.stage = F.READY
         part.needs_sync = True
         self.save(part)
         return part
@@ -242,24 +245,30 @@ class Library:
         return issues
 
     # ---------- sync job for Altium ----------
-    def write_sync_job(self) -> Path | None:
+    def pending_changes(self) -> list[Part]:
+        """Parts waiting for Send to Altium."""
+        return [p for p in self.parts() if p.needs_sync or (self.settings.skip_review and p.stage == F.TO_CHECK)]
+
+    def write_sync_job(self, parts: list[Part] | None = None, dst: tuple[str, str] | None = None,
+                       kind: str = "main") -> Path | None:
         """Write the job PartKit Sync runs inside Altium. Returns its path, or None if nothing to do.
 
         Plain 'KEY=VALUE' lines grouped in [PART]...[END] blocks, so the
         DelphiScript side can read it with a TStringList and no parser.
         """
-        pending = [p for p in self.parts() if p.needs_sync or (self.settings.skip_review and p.stage == "Review")]
+        pending = self.pending_changes() if parts is None else parts
         if not pending:
             return None
         lines = ["# PartKit sync job", f"LIBRARY_ROOT={self.root.resolve()}"]
         for p in pending:
             lines.append("[PART]")
-            stage = "Released" if self.settings.skip_review and p.stage == "Review" else p.stage
+            stage = F.READY if self.settings.skip_review and p.stage == F.TO_CHECK else p.stage
             for k, v in (
                 ("MPN", p.mpn), ("STAGE", stage), ("CATEGORY", p.category),
                 ("SRC_SCHLIB", p.schlib), ("SRC_SYMBOL", p.symbol),
                 ("SRC_PCBLIB", p.pcblib), ("SRC_FOOTPRINT", p.footprint),
-                ("DST_SCHLIB", p.target_schlib), ("DST_PCBLIB", p.target_pcblib),
+                ("DST_SCHLIB", dst[0] if dst else p.target_schlib),
+                ("DST_PCBLIB", dst[1] if dst else p.target_pcblib),
                 ("STEP", p.step), ("MODEL3D", p.model_3d_source),
                 ("BOX_MM", ",".join(f"{x:g}" for x in p.box_mm)),
                 ("COMPONENT_NAME", F.display_name(p.params, p.category) or p.mpn),
@@ -275,6 +284,8 @@ class Library:
             lines.append("[END]")
         path = self.root / "partkit-data" / "sync" / "pending-sync.txt"
         path.write_text("\r\n".join(lines) + "\r\n", encoding="utf-8-sig")
+        # what this job is for, so its result is recorded in the right place
+        (path.parent / "pending-kind.txt").write_text(kind, encoding="utf-8")
         _point_altium_at(path)
         return path
 
@@ -284,16 +295,26 @@ class Library:
         if not path.exists():
             return []
         messages = []
+        kind_file = path.parent / "pending-kind.txt"
+        kind = kind_file.read_text(encoding="utf-8").strip() if kind_file.exists() else "main"
+        done: list[str] = []
         for line in path.read_text(encoding="utf-8-sig").splitlines():
             if line.startswith("OK="):
-                part = self.get(line[3:].strip())
-                if part:
+                mpn = line[3:].strip()
+                done.append(mpn)
+                part = self.get(mpn)
+                if part and kind == "main":
                     part.needs_sync = False
                     self.save(part)
+                if part:
                     messages.append(f"{part.mpn}: synced")
             elif line.startswith("FAIL="):
                 mpn, _, why = line[5:].partition("|")
                 messages.append(f"{mpn.strip()}: failed ({why.strip()})")
+        if kind.startswith("project:"):
+            from . import projects  # local import: projects imports this module
+
+            projects.record_written(self, kind[len("project:"):], done)
         path.rename(path.with_name(f"sync-result.{time.time_ns()}.txt"))
         return messages
 

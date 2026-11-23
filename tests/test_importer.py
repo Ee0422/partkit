@@ -24,7 +24,7 @@ def test_embedded_3d_model(lib, fake_altium, tmp_path):
     res = import_zip(lib, z, category="Power")
     p = res.part
     assert res.provider == "SamacSys"
-    assert p.mpn == "TPS62130RGTR" and p.stage == "Review" and p.category == "Power"
+    assert p.mpn == "TPS62130RGTR" and p.stage == "To check" and p.category == "Power"
     assert p.model_3d == "Full" and p.model_3d_source == "embedded"
     assert p.params["Manufacturer"] == "Texas Instruments"
     assert (lib.root / p.schlib).exists() and (lib.root / p.pcblib).exists()

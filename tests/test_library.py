@@ -19,9 +19,9 @@ def test_stages_sync_job_and_result(lib):
     assert lib.write_sync_job() is None  # Review parts are not synced
     lib.approve("LM358DR")
     job = lib.write_sync_job().read_text(encoding="utf-8-sig")
-    assert "MPN=LM358DR" in job and "STAGE=Released" in job
+    assert "MPN=LM358DR" in job and "STAGE=Ready" in job
     assert "PARAM=Manufacturer|TI" in job and "PARAM=Manufacturer Part Number|LM358DR" in job
-    assert "PARAM=PartKit Status|Released" in job
+    assert "PARAM=PartKit Status|Ready" in job
     assert "DESIGNATOR=U?" in job  # vendor designators like "RC0603FR-071KL" are replaced
     (lib.root / "partkit-data/sync/sync-result.txt").write_text("OK=LM358DR\r\n", encoding="utf-8")
     assert lib.read_sync_result() == ["LM358DR: synced"]
@@ -51,10 +51,10 @@ def test_safe_names_for_odd_mpns(lib):
 
 
 def test_no_partkit_drawn_footprints_and_old_starter_parts_can_go(lib):
-    old = Part(mpn="RC0603FR-0710KL", category="Resistors", source="PartKit", stage="Released", needs_sync=True)
+    old = Part(mpn="RC0603FR-0710KL", category="Resistors", source="PartKit", stage="Ready", needs_sync=True)
     lib.save(old)
     lib.save(Part(mpn="LM358DR", category="ICs", source="SnapMagic", symbol="LM358", footprint="SOIC8",
-                  stage="Released", needs_sync=True))
+                  stage="Ready", needs_sync=True))
     job = lib.write_sync_job().read_text(encoding="utf-8-sig")
     assert "[FOOTPRINT]" not in job and "GENERIC=1" not in job
     assert any("starter" in i.problem for i in lib.health_check())

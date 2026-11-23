@@ -69,7 +69,7 @@ def import_cmd(
     mpn: Optional[str] = typer.Option(None, help="Manufacturer part number, if the file name doesn't show it."),
     category: Optional[str] = typer.Option(None, help="One of: " + ", ".join(F.CATEGORIES)),
 ):
-    """Import a CAD download (.zip or .IntLib from SnapMagic, SamacSys, Ultra Librarian, manufacturer) into Review."""
+    """Import a CAD download (.zip or .IntLib from SnapMagic, SamacSys, Ultra Librarian, manufacturer) into To check."""
     lib = open_lib()
     _check_category(category)
     try:
@@ -110,10 +110,11 @@ def watch(folder: Optional[Path] = typer.Option(None, help="Folder to watch (def
 
 
 @app.command("list")
-def list_cmd(stage: Optional[str] = typer.Option(None, help="Review, Released or Obsolete"),
+def list_cmd(stage: Optional[str] = typer.Option(None, help="'To check', Ready or Obsolete"),
              category: Optional[str] = None):
     """List parts in the library."""
     t = Table("MPN", "Category", "Stage", "Value", "3D", "Footprint")
+    stage = F.OLD_STAGE_NAMES.get(stage, stage) if stage else stage
     for p in open_lib().parts():
         if (stage and p.stage != stage) or (category and p.category != category):
             continue
@@ -140,7 +141,7 @@ def show(mpn: str):
 
 @app.command()
 def approve(mpn: str, category: Optional[str] = typer.Option(None)):
-    """Move a part from Review to Released, ready for PartKit Sync."""
+    """Mark a checked part Ready, so Send to Altium writes it into your libraries."""
     lib = open_lib()
     _check_category(category)
     if category:
@@ -154,7 +155,10 @@ def approve(mpn: str, category: Optional[str] = typer.Option(None)):
     except KeyError as e:
         console.print(f"[red]{e.args[0]}[/]")
         raise typer.Exit(1)
-    console.print(f"{p.mpn} released to {p.target_schlib} and {p.target_pcblib}. Run PartKit Sync in Altium.")
+    console.print(f"{p.mpn} is Ready for {p.target_schlib} and {p.target_pcblib}. Next: [bold]partkit sync[/]")
+
+
+app.command("ready", help="Same as approve: mark a checked part Ready.")(approve)
 
 
 @app.command()
@@ -288,7 +292,7 @@ def add(mpn: str, category: Optional[str] = typer.Option(None, help="Leave out t
         console.print(f"[red]{mpn} wasn't found at your suppliers, so nothing was added.[/]")
         raise typer.Exit(1)
     part = add_from_search(lib, mpn, res.best(), category=category)
-    console.print(f"{part.mpn} added to Review as {part.category}. Next: [bold]partkit cad {part.mpn}[/]")
+    console.print(f"{part.mpn} added to To check as {part.category}. Next: [bold]partkit cad {part.mpn}[/]")
 
 
 @app.command()
@@ -343,7 +347,7 @@ def set_hunting(mode: str = typer.Argument(..., help="off, ask or always")):
 
 @app.command("new-value")
 def new_value_cmd(
-    source: str = typer.Argument(..., help="A checked (Released) part to copy, e.g. your 10k 0603"),
+    source: str = typer.Argument(..., help="A checked (Ready) part to copy, e.g. your 10k 0603"),
     value: Optional[str] = typer.Option(None, "--value", help="New value for a resistor or capacitor, e.g. 4.7k"),
     mpn: Optional[str] = typer.Option(None, "--mpn", help="Or the new part number, for any other part"),
     pick: int = typer.Option(1, "--pick", help="Which search result to use (1 = the first, Basic first)"),
@@ -379,7 +383,7 @@ def new_value_cmd(
     except reuse.ReuseProblem as e:
         console.print(f"[red]{e}[/]")
         raise typer.Exit(1)
-    console.print(f"{part.mpn} added to Review, copied from {source}. Next: [bold]partkit approve {part.mpn}[/]")
+    console.print(f"{part.mpn} added to To check, copied from {source}. Next: [bold]partkit approve {part.mpn}[/]")
 
 
 @app.command("new-from-footprint")
@@ -402,7 +406,7 @@ def new_from_footprint_cmd(
     except reuse.ReuseProblem as e:
         console.print(f"[red]{e}[/]")
         raise typer.Exit(1)
-    console.print(f"{part.mpn} added to Review on the footprint of {source}. " + part.notes[0])
+    console.print(f"{part.mpn} added to To check on the footprint of {source}. " + part.notes[0])
 
 
 @app.command()
@@ -412,8 +416,9 @@ def favourite(mpn: str, off: bool = typer.Option(False, "--off", help="Take the 
     console.print(f"{mpn} {'is no longer a favourite' if off else 'is a favourite'}.")
 
 
-kit_app = typer.Typer(help="Kits: groups of parts you use together, e.g. 'USB-C power input'.")
-app.add_typer(kit_app, name="kit")
+kit_app = typer.Typer(help="Templates (kits): groups of parts you start projects from, e.g. 'USB-C power input'.")
+app.add_typer(kit_app, name="template")
+app.add_typer(kit_app, name="kit", hidden=True)  # the older name still works
 
 
 @kit_app.command("list")
@@ -482,6 +487,98 @@ def kit_bom(names: list[str], out: Optional[Path] = typer.Option(None, "--out", 
     if out:
         kits.write_csv(lines, out)
         console.print(f"Saved to {out}")
+
+
+project_app = typer.Typer(help="Projects: the parts one board uses, optionally with its own library.")
+app.add_typer(project_app, name="project")
+
+
+@project_app.command("new")
+def project_new(name: str, template: list[str] = typer.Option([], "--template", help="Start from this template (repeat)"),
+                copy_of: str = typer.Option("", "--copy-of", help="Start as a copy of another project"),
+                own_library: bool = typer.Option(False, "--own-library", help="Give it its own .SchLib/.PcbLib")):
+    """Make a project: empty, from templates, or as a copy of another project."""
+    from . import projects
+
+    try:
+        p = projects.create(open_lib(), name, templates=template, copy_of=copy_of, own_library=own_library)
+    except (ValueError, KeyError) as e:
+        console.print(f"[red]{e.args[0]}[/]")
+        raise typer.Exit(1)
+    console.print(f"Project '{p.name}' made with {len(p.items)} parts."
+                  + (f" Its library goes in {p.folder}" if p.own_library else ""))
+
+
+@project_app.command("list")
+def project_list():
+    """Show your projects."""
+    from . import projects
+
+    for p in projects.projects(open_lib()):
+        console.print(f"[bold]{p.name}[/]: {len(p.items)} parts" + (", own library" if p.own_library else ""))
+
+
+@project_app.command("add")
+def project_add(name: str, mpns: list[str], also_template: str = typer.Option("", "--also-template")):
+    """Add parts to one project (and, if you like, a template too)."""
+    from . import projects
+
+    try:
+        p = projects.add_parts(open_lib(), name, mpns, also_template=also_template)
+    except KeyError as e:
+        console.print(f"[red]{e.args[0]}[/]")
+        raise typer.Exit(1)
+    console.print(f"Project '{p.name}' now has {len(p.items)} parts.")
+
+
+@project_app.command("show")
+def project_show(name: str, out: Optional[Path] = typer.Option(None, "--out", help="Save the starting parts list as CSV")):
+    """A project's parts, and whether each is in its own library yet."""
+    from . import kits, projects
+
+    lib = open_lib()
+    p = projects.get(lib, name)
+    if p is None:
+        console.print(f"[red]No project called {name!r}[/]")
+        raise typer.Exit(1)
+    lines = projects.parts_list(lib, p)
+    t = Table("Qty", "MPN", "Value", "In project library", "Note")
+    for line in lines:
+        t.add_row(str(line.qty), line.mpn, line.part.params.get("Value", "") if line.part else "",
+                  ("yes" if line.mpn in p.in_library else "not yet") if p.own_library else "", line.warning)
+    console.print(t)
+    if out:
+        kits.write_csv(lines, out)
+        console.print(f"Saved to {out}")
+
+
+@project_app.command("update")
+def project_update(name: str, everything: bool = typer.Option(False, "--all", help="Send every part again"),
+                   start: bool = typer.Option(True, help="Ask Altium to run PartKit Sync automatically.")):
+    """Write the project's new parts (only those it doesn't have yet) into its own library."""
+    from . import projects
+    from .altium_launch import copy_scripts, start_sync
+
+    lib = open_lib()
+    for m in lib.read_sync_result():
+        console.print(m)
+    p = projects.get(lib, name)
+    if p is None:
+        console.print(f"[red]No project called {name!r}[/]")
+        raise typer.Exit(1)
+    try:
+        job, waiting = projects.write_update_job(lib, p, everything=everything)
+    except ValueError as e:
+        console.print(f"[red]{e}[/]")
+        raise typer.Exit(1)
+    for w in waiting:
+        console.print(f"[yellow]{w}[/]")
+    if not job:
+        console.print("[green]The project library already has every Ready part.[/]")
+        return
+    if start:
+        console.print(start_sync(copy_scripts())[1])
+    console.print(f"When Altium has finished, run [bold]partkit project update \"{p.name}\"[/] again to record it.")
 
 
 @app.command("remove-starter")

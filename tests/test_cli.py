@@ -17,7 +17,7 @@ def run(lib, *args):
 def test_new_value_favourite_and_kits_from_the_command_line(lib, monkeypatch, tmp_path):
     checked_10k(lib)
     monkeypatch.setattr(search, "find_any", lambda q, s, http=None: SearchResult(mpn=q, offers=[J47]))
-    assert "added to Review" in run(lib, "new-value", "RC0603FR-0710KL", "--value", "4.7k")
+    assert "added to To check" in run(lib, "new-value", "RC0603FR-0710KL", "--value", "4.7k").replace("\n", " ")
     assert lib.get("0603WAF4701T5E").footprint == "RESC1608X55N"
     run(lib, "favourite", "0603WAF4701T5E")
     assert lib.get("0603WAF4701T5E").favourite

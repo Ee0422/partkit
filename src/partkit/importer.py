@@ -2,7 +2,7 @@
 
 Files are found by type wherever they sit in the zip, including zips inside
 zips, so differing or changing vendor layouts still work. Every import lands
-in the Review stage; nothing reaches your chosen libraries until approved.
+in the To check stage; nothing reaches your chosen libraries until approved.
 """
 
 from __future__ import annotations
@@ -263,7 +263,7 @@ def import_zip(lib: Library, zip_path: Path, mpn: str | None = None, category: s
             part.target_schlib, part.target_pcblib = lib.settings.target_libs(part.category)
         for k, v in params.items():
             part.params.setdefault(k, v)
-        part.stage = "Review"
+        part.stage = "To check"
         part.source = provider
 
         review = lib.root / "Review" / safe_name(mpn)
@@ -307,7 +307,7 @@ def import_zip(lib: Library, zip_path: Path, mpn: str | None = None, category: s
                 shutil.copy2(zip_path, arch)
 
         lib.save(part)
-        messages.append(f"{mpn} imported from {provider} into Review ({part.model_3d} 3D model).")
+        messages.append(f"{mpn} imported from {provider} into To check ({part.model_3d} 3D model).")
         return ImportResult(part=part, provider=provider, messages=messages, replaced_existing=existing is not None)
 
 
@@ -340,7 +340,7 @@ def attach_step(lib: Library, mpn: str, step: Path, provider: str = "manual") ->
     part.step = f"3D/{dest.name}"
     part.model_3d, part.model_3d_source = "Full", "external"
     part.box_mm = []
-    if part.stage == "Released":
+    if part.stage == "Ready":
         part.needs_sync = True
     lib.save(part)
     return ImportResult(part=part, provider=provider,

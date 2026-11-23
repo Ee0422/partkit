@@ -4,7 +4,7 @@ Every 0603 resistor uses the same footprint, so once one is checked in
 Altium, the next value only needs a new part number. "New value" copies the
 symbol, footprint and 3D model; "new part from this footprint" copies only
 the footprint and 3D model and takes the symbol from any part you choose.
-Either way the new part waits in Review until you approve it.
+Either way the new part waits in To check until you mark it Ready.
 """
 
 from __future__ import annotations
@@ -28,8 +28,8 @@ def _check_source(part: Part | None, what: str) -> Part:
         raise ReuseProblem(f"{part.mpn} is an old PartKit starter part whose footprint was never checked.")
     if not part.footprint or not part.pcblib:
         raise ReuseProblem(f"{part.mpn} has no footprint yet. Get its CAD files first.")
-    if part.stage != "Released":
-        raise ReuseProblem(f"Approve {part.mpn} first, so only checked parts are copied.")
+    if part.stage != "Ready":
+        raise ReuseProblem(f"Mark {part.mpn} Ready first, so only checked parts are copied.")
     return part
 
 
@@ -39,7 +39,7 @@ def _new_part(lib: Library, mpn: str, offers: list[Offer], category: str) -> Par
         raise ReuseProblem("Give the new part's manufacturer part number, or pick one from the search.")
     if lib.get(mpn):
         raise ReuseProblem(f"{mpn} is already in your library.")
-    return Part(mpn=mpn, category=category, stage="Review")
+    return Part(mpn=mpn, category=category, stage="To check")
 
 
 def new_value(lib: Library, source_mpn: str, mpn: str = "", offers: list[Offer] | None = None) -> Part:
@@ -113,3 +113,24 @@ def value_query_text(src: Part, value: str) -> str:
 def can_search_by_value(part: Part) -> bool:
     """Resistors and ceramic capacitors can be found at JLCPCB by value."""
     return part.category in ("Resistors", "Capacitors")
+
+
+def _norm_package(text: str) -> str:
+    import re
+
+    return re.sub(r"[\s\-_()]", "", text.upper())
+
+
+def package_warning(src: Part, offer: Offer | None) -> str:
+    """A plain warning if the chosen part's package differs from the footprint's package, else ''."""
+    if offer is None:
+        return ""
+    theirs = offer.specs.get("Package / Case") or offer.specs.get("Package") or ""
+    ours = src.params.get("Size") or src.params.get("Package") or ""
+    if not theirs or not ours:
+        return ""
+    a, b = _norm_package(ours), _norm_package(theirs)
+    if a == b or (a.isdigit() and b.startswith(a)):  # "0603" vs "0603 (1608 Metric)"
+        return ""
+    return (f"{offer.mpn} is listed as {theirs}, but the footprint you're copying is for {ours}. "
+            "A different package needs a different footprint.")

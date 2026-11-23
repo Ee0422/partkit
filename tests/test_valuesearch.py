@@ -105,7 +105,7 @@ def test_added_resistor_waits_for_cad_files(lib):
     rows = search.merge_rows(V.by_value(V.parse("1k 0603"), FakeHttp({"resistors/list": RES})), ["JLCPCB"])
     p = search.add_from_search(lib, rows[0].mpn, search.offers_for(rows[0], ["JLCPCB"]))
     assert p.params["Supplier Part Number 1"] == "C100" and p.params["Size"] == "0603"
-    assert p.stage == "Review" and not p.footprint and p.target_schlib == "Libraries/Resistors.SchLib"
+    assert p.stage == "To check" and not p.footprint and p.target_schlib == "Libraries/Resistors.SchLib"
 
 
 @pytest.mark.skipif(not os.environ.get("PARTKIT_LIVE"), reason="talks to jlcsearch; set PARTKIT_LIVE=1")

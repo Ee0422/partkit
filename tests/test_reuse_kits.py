@@ -7,7 +7,7 @@ from partkit.library import Part
 from partkit.suppliers import Offer
 
 
-def checked_10k(lib, stage="Released"):
+def checked_10k(lib, stage="Ready"):
     p = Part(mpn="RC0603FR-0710KL", category="Resistors", stage=stage, source="SnapMagic",
              schlib="Review/RC0603FR-0710KL/RC0603FR-0710KL.SchLib", symbol="RC0603FR-0710KL",
              pcblib="Review/RC0603FR-0710KL/RC0603FR-0710KL.PcbLib", footprint="RESC1608X55N",
@@ -27,7 +27,7 @@ J47 = Offer("JLCPCB", "C23162", "0603WAF4701T5E", description="4.7kΩ ±1% 100mW
 def test_new_value_copies_checked_cad_and_takes_new_specs(lib):
     checked_10k(lib)
     p = reuse.new_value(lib, "RC0603FR-0710KL", offers=[J47])
-    assert p.mpn == "0603WAF4701T5E" and p.stage == "Review" and p.copied_from == "RC0603FR-0710KL"
+    assert p.mpn == "0603WAF4701T5E" and p.stage == "To check" and p.copied_from == "RC0603FR-0710KL"
     assert (p.symbol, p.footprint, p.step, p.model_3d_source) == ("RC0603FR-0710KL", "RESC1608X55N",
                                                                   "3D/RESC1608X55N.step", "embedded")
     assert p.params["Value"] == "4.7kΩ" and p.params["Supplier Part Number 1"] == "C23162"
@@ -40,10 +40,10 @@ def test_new_value_copies_checked_cad_and_takes_new_specs(lib):
 
 
 def test_only_checked_parts_can_be_copied(lib):
-    checked_10k(lib, stage="Review")
-    with pytest.raises(reuse.ReuseProblem, match="Approve"):
+    checked_10k(lib, stage="To check")
+    with pytest.raises(reuse.ReuseProblem, match="Ready first"):
         reuse.new_value(lib, "RC0603FR-0710KL", offers=[J47])
-    lib.save(Part(mpn="OLD", source="PartKit", stage="Released", footprint="X", pcblib="y"))
+    lib.save(Part(mpn="OLD", source="PartKit", stage="Ready", footprint="X", pcblib="y"))
     with pytest.raises(reuse.ReuseProblem, match="never checked"):
         reuse.new_value(lib, "OLD", mpn="NEW")
     with pytest.raises(reuse.ReuseProblem, match="isn't in your library"):
@@ -66,10 +66,10 @@ def test_value_query_uses_the_source_spec(lib):
 
 
 def test_new_part_from_footprint_with_symbol_from_another_part(lib):
-    lib.save(Part(mpn="AP2112K-3.3TRG1", category="Power", stage="Released", source="SnapMagic",
+    lib.save(Part(mpn="AP2112K-3.3TRG1", category="Power", stage="Ready", source="SnapMagic",
                   schlib="Review/a/a.SchLib", symbol="AP2112K", pcblib="Review/a/a.PcbLib", footprint="SOT-23-5",
                   model_3d="Full", model_3d_source="embedded", params={"Package": "SOT-23-5"}))
-    lib.save(Part(mpn="RT9013-33GB", category="Power", stage="Released", source="SnapMagic",
+    lib.save(Part(mpn="RT9013-33GB", category="Power", stage="Ready", source="SnapMagic",
                   schlib="Review/b/b.SchLib", symbol="RT9013", pcblib="Review/b/b.PcbLib", footprint="SOT23-5N"))
     p = reuse.new_from_footprint(lib, "AP2112K-3.3TRG1", "ME6211C33M5G", symbol_from="RT9013-33GB")
     assert (p.footprint, p.symbol, p.schlib) == ("SOT-23-5", "RT9013", "Review/b/b.SchLib")
@@ -88,7 +88,7 @@ def test_favourites(lib):
 
 def test_kits_combine_into_one_project_parts_list(lib, tmp_path):
     checked_10k(lib)
-    lib.save(Part(mpn="CC0603KRX7R9BB104", category="Capacitors", stage="Released",
+    lib.save(Part(mpn="CC0603KRX7R9BB104", category="Capacitors", stage="Ready",
                   params={"Value": "100nF", "Supplier Part Number 1": "C14663"}))
     lib.save(Part(mpn="USB4105-GF-A", category="Connectors", stage="Obsolete"))
     kits.add_parts(lib, "USB-C power input", ["USB4105-GF-A", "RC0603FR-0710KL"])

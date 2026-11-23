@@ -39,7 +39,7 @@ def test_approve_and_set_category(win):
     win.refresh_library()
     win.parts_table.selectRow(0)
     win.approve()
-    assert win.lib.get("X1").stage == "Released"
+    assert win.lib.get("X1").stage == "Ready"
     win.cat_choice.setCurrentText("Power")
     win.parts_table.selectRow(0)
     win.set_category()
@@ -63,7 +63,7 @@ def test_test_mode_switches_library(win):
 
 
 def test_health_check_and_sync(win, monkeypatch):
-    win.lib.save(Part(mpn="Y1", stage="Released", needs_sync=True))
+    win.lib.save(Part(mpn="Y1", stage="Ready", needs_sync=True))
     win.run_check()
     assert win.health_table.rowCount() > 0
     calls = []
@@ -196,6 +196,10 @@ def test_new_value_dialog_and_favourites(win, monkeypatch):
     d.search()
     assert seen == ["4.7k 0603 1%"] and d.table.rowCount() == 1
     d.create()
+    assert d.created is None  # nothing is picked for you
+    d.table.selectRow(0)
+    assert "C23162" in d.choice.text() and "Basic" in d.choice.text()
+    d.create()
     assert d.created.mpn == "0603WAF4701T5E" and d.created.footprint == "RESC1608X55N"
     win.fav_only.setChecked(True)
     win.refresh_library()
@@ -223,3 +227,66 @@ def test_kits_tab(win, tmp_path, monkeypatch):
     out = tmp_path / "p.csv"
     win.save_kit_bom(str(out))
     assert "RC0603FR-0710KL" in out.read_text(encoding="utf-8-sig")
+
+
+def test_footprint_dialog_warns_on_package_mismatch(win, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    from partkit import search
+    from partkit.search import SearchResult
+    from partkit.suppliers import Offer
+
+    win.lib.save(Part(mpn="AP2112K-3.3TRG1", category="Power", stage="Ready", source="SnapMagic", symbol="A",
+                      schlib="Review/a/a.SchLib", pcblib="Review/a/a.PcbLib", footprint="SOT-23-5",
+                      params={"Package": "SOT-23-5"}))
+    wrong = Offer("JLCPCB", "C9", "XC6206P332MR", stock=10, status="Basic", specs={"Package / Case": "SOT-23-3"})
+    monkeypatch.setattr(search, "find_any", lambda q, s, http=None: SearchResult(mpn=q, offers=[wrong]))
+    asked = []
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: (asked.append(a[2]), QMessageBox.No)[1])
+    d = gui.ReuseDialog(win, win.lib, win.lib.get("AP2112K-3.3TRG1"), "footprint")
+    d.text.setText("XC6206P332MR")
+    d.search()
+    d.table.selectRow(0)
+    d.create()
+    assert d.created is None and "SOT-23-3" in asked[0]
+    d.table.clearSelection()
+    d.text.setText("ME6211C33M5G")
+    d.create()
+    assert "without supplier details" in asked[1] and d.created is None
+
+
+def test_projects_tab_and_add_to_project(win, monkeypatch):
+    from partkit import projects
+    from test_projects import ready
+
+    ready(win.lib, "10K")
+    ready(win.lib, "330R")
+    projects.create(win.lib, "Board", own_library=True)
+    win.refresh_all()
+    win.parts_table.selectRow(0)
+
+    class FakeDialog:
+        def __init__(self, *a):
+            from PySide6.QtWidgets import QComboBox
+            self.project, self.template = QComboBox(), QComboBox()
+            self.project.addItem("Board")
+            self.template.addItem("No, this project only")
+
+        def exec(self):
+            return gui.QDialog.Accepted
+
+    monkeypatch.setattr(gui, "AddToProjectDialog", FakeDialog)
+    win.add_to_project()
+    win.project_list.item(0).setSelected(True)
+    assert win.kit_table.rowCount() == 1 and not win.proj_lib_box.isHidden()
+    assert "1 new" in win.update_lib_btn.text()
+    calls = []
+    monkeypatch.setattr(gui, "start_sync", lambda prjscr: (calls.append(prjscr), (True, "ok"))[1])
+    win.update_project_library()
+    assert calls
+
+
+def test_send_button_counts_changes(win):
+    win.lib.save(Part(mpn="Z1", stage="Ready", needs_sync=True))
+    win.refresh_library()
+    assert win.sync_btn.text() == "Send 1 change to Altium"

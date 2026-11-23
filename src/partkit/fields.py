@@ -86,7 +86,10 @@ DESIGNATOR_PREFIX: dict[str, str] = {
     "Power": "U", "Connectors": "J", "Crystals": "Y", "Misc": "U",
 }
 
-STAGES: tuple[str, ...] = ("Review", "Released", "Obsolete")
+# Plain words for first-time users. Older libraries said Review/Released.
+TO_CHECK, READY, OBSOLETE = "To check", "Ready", "Obsolete"
+STAGES: tuple[str, ...] = (TO_CHECK, READY, OBSOLETE)
+OLD_STAGE_NAMES = {"Review": TO_CHECK, "Released": READY, "Downloaded": TO_CHECK}
 
 MODEL_3D_STATES: tuple[str, ...] = ("Full", "Simple", "None")
 

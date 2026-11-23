@@ -382,9 +382,9 @@ def apply_offers(part: Part, offers: list[Offer], overwrite: bool = False) -> li
 
 
 def add_from_search(lib: Library, mpn: str, offers: list[Offer], category: str | None = None) -> Part:
-    """Create (or update) a part from search results. It waits in Review until CAD files arrive."""
+    """Create (or update) a part from search results. It waits in To check until CAD files arrive."""
     best = offers[0].mpn if offers and offers[0].mpn else mpn
-    part = lib.get(best) or Part(mpn=best, stage="Review")
+    part = lib.get(best) or Part(mpn=best, stage="To check")
     if category:
         part.category = category
     apply_offers(part, offers)
