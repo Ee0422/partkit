@@ -14,7 +14,9 @@ from pathlib import Path
 
 SETTINGS_FILE = "partkit-settings.toml"
 
-DEFAULT_SUPPLIERS = ["JLCPCB", "DigiKey", "Mouser", "Farnell", "LCSC"]
+# The supplier you buy from, then an optional second one to compare with.
+DEFAULT_SUPPLIERS = ["JLCPCB"]
+ALL_SUPPLIERS = ["JLCPCB", "LCSC", "DigiKey", "Mouser", "Farnell"]
 DEFAULT_PROVIDERS = ["SnapMagic", "SamacSys", "Manufacturer", "UltraLibrarian"]
 HUNTING_MODES = ("off", "ask", "always")
 
@@ -100,8 +102,8 @@ def load_settings(library: Path) -> Settings:
     data = tomllib.loads(path.read_text(encoding="utf-8"))
     known = {k: v for k, v in data.items() if k in Settings.__dataclass_fields__}
     s = Settings(**known)
-    # suppliers/providers added in newer versions appear at the end of your list
-    s.suppliers += [x for x in DEFAULT_SUPPLIERS if x not in s.suppliers]
+    # providers added in newer versions appear at the end of your list
+    s.suppliers = [x for x in s.suppliers if x in ALL_SUPPLIERS] or list(DEFAULT_SUPPLIERS)
     s.providers += [x for x in DEFAULT_PROVIDERS if x not in s.providers]
     s.validate()
     return s

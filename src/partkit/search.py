@@ -24,6 +24,7 @@ class SearchResult:
     offers: list[Offer] = field(default_factory=list)
     messages: list[str] = field(default_factory=list)
     not_set_up: list[str] = field(default_factory=list)
+    query: object = None  # a valuesearch.ValueQuery when you searched by value
 
     @property
     def exact(self) -> list[Offer]:
@@ -71,7 +72,13 @@ def find(mpn: str, settings: Settings, http: Http = default_http, clients: dict 
             res.messages.append(f"{name}: {e}")
             continue
         res.offers += found
-        if not found:
+        if name in NO_KEY_NEEDED and not any(_norm(o.mpn) == _norm(res.mpn) for o in found):
+            if name == "JLCPCB" or "JLCPCB" not in settings.suppliers:
+                res.messages.append(
+                    f"{res.mpn} isn't in JLCPCB's parts list (it only lists parts JLCPCB stocks). "
+                    "For a resistor or capacitor, search by value instead, e.g. 1k 0603 1% or 100nF 0603 50V X7R."
+                    + (" Similar parts are shown below." if found else ""))
+        elif not found:
             res.messages.append(f"{name}: no match for {res.mpn}")
     if res.not_set_up and not res.offers:
         if len(res.not_set_up) == len([n for n in settings.suppliers if n in SUPPLIERS and n not in NO_KEY_NEEDED]):
@@ -81,6 +88,101 @@ def find(mpn: str, settings: Settings, http: Http = default_http, clients: dict 
         else:
             res.messages.append("Not searched (no key yet, optional): " + ", ".join(res.not_set_up) + ".")
     return res
+
+
+def find_any(text: str, settings: Settings, http: Http = default_http) -> SearchResult:
+    """One box for everything: a value such as "1k 0603 1%", or a part number."""
+    from . import valuesearch
+
+    q = valuesearch.parse(text)
+    if q is None:
+        return find(text, settings, http)
+    res = SearchResult(mpn=text.strip(), query=q)
+    try:
+        res.offers = valuesearch.by_value(q, http)
+    except SupplierError as e:
+        res.messages.append(f"JLCPCB: {e}")
+        return res
+    kind = "resistor" if q.kind == "R" else "capacitor"
+    if res.offers:
+        basic = sum(o.status == "Basic" for o in res.offers)
+        res.messages.append(f"{len(res.offers)} JLCPCB {kind}s match {q.describe()}"
+                            + (f", {basic} of them Basic (no extra assembly fee)." if basic else "."))
+    else:
+        res.messages.append(f"No JLCPCB {kind} matches {q.describe()}. Try fewer details, e.g. drop the "
+                            "tolerance or voltage.")
+    return res
+
+
+# ---------------------------------------------------------------- one row per part
+
+@dataclass
+class Row:
+    """One part in the results, however many suppliers sell it."""
+    offer: Offer                 # the offer from the supplier you buy from
+    sold_by: list[str]
+    category: str = ""
+    specs: dict[str, str] = field(default_factory=dict)
+
+    @property
+    def mpn(self) -> str:
+        return self.offer.mpn
+
+    def rating(self) -> str:
+        return self.specs.get("Power") or self.specs.get("Voltage Rating") or ""
+
+    def value(self) -> str:
+        return self.specs.get("Resistance") or self.specs.get("Capacitance") or ""
+
+
+def merge_rows(offers: list[Offer], suppliers: list[str]) -> list[Row]:
+    """JLCPCB and LCSC share C-numbers, so one part is one row with both names in 'Sold by'."""
+    order = {n: i for i, n in enumerate(suppliers)}
+    groups: dict[str, list[Offer]] = {}
+    keys: list[str] = []
+    for o in offers:
+        key = o.supplier_pn.upper() if o.supplier in NO_KEY_NEEDED else f"{o.supplier}:{o.supplier_pn}"
+        if key not in groups:
+            groups[key] = []
+            keys.append(key)
+        groups[key].append(o)
+    rows = []
+    for key in keys:
+        group = sorted(groups[key], key=lambda o: order.get(o.supplier, 99))
+        names = [o.supplier for o in group]
+        if group[0].supplier in NO_KEY_NEEDED:
+            # every JLCPCB part number is an LCSC one too
+            for extra in ("JLCPCB", "LCSC"):
+                if extra not in names and extra in suppliers:
+                    names.append(extra)
+        jlc = next((o for o in group if o.supplier == "JLCPCB"), None)
+        main = group[0]
+        if jlc and not main.status:
+            main.status = jlc.status
+        cat = guess_category(group)
+        specs: dict[str, str] = {}
+        for o in group:
+            for k, v in specs_for(o, cat or F.DEFAULT_CATEGORY).items():
+                specs.setdefault(k, v)
+        rows.append(Row(offer=main, sold_by=names, category=cat, specs=specs))
+    return rows
+
+
+def offers_for(row: Row, suppliers: list[str]) -> list[Offer]:
+    """The offers to save with a part: one per supplier you use, yours first."""
+    out = [row.offer]
+    o = row.offer
+    for name in suppliers:
+        if name == o.supplier or name not in row.sold_by or name not in NO_KEY_NEEDED:
+            continue
+        twin = Offer(**{**o.__dict__, "supplier": name, "price_breaks": list(o.price_breaks),
+                        "specs": dict(o.specs)})
+        if name == "LCSC":
+            twin.url, twin.status = f"https://www.lcsc.com/product-detail/{o.supplier_pn}.html", ""
+        else:
+            twin.url = f"https://jlcpcb.com/partdetail/{o.supplier_pn}"
+        out.append(twin)
+    return out
 
 
 # ---------------------------------------------------------------- specs
@@ -174,7 +276,7 @@ def _clean_spec(field_name: str, value: str) -> str:
         if not m:
             return v
         watts = float(m.group(1)) / (1000 if m.group(2) == "mW" else 1)
-        return f"{watts:g}W"  # same form as the starter pack: 0.1W
+        return f"{watts:g}W"  # short form: 0.1W
     if field_name == "Size":
         m = _SIZE.search(v)
         return m.group(1) if m else v
@@ -288,9 +390,9 @@ def add_from_search(lib: Library, mpn: str, offers: list[Offer], category: str |
     apply_offers(part, offers)
     if not part.category:
         part.category = F.DEFAULT_CATEGORY
-    if not part.target_schlib:
+    if not part.target_schlib or part.source == "PartKit":
         part.target_schlib, part.target_pcblib = lib.settings.target_libs(part.category)
-    if part.source in ("", "unknown"):
+    if part.source in ("", "unknown", "PartKit"):
         part.source = "search"
     lib.save(part)
     return part

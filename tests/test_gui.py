@@ -77,7 +77,7 @@ def test_setup_dialog_creates_library(app, tmp_path, monkeypatch):
     monkeypatch.setattr(gui, "remember_library_path", lambda p: None)
     d = gui.SetupDialog(folder=tmp_path / "New Library")
     lib = d.run_setup()
-    assert (lib.root / "partkit-settings.toml").exists() and len(lib.parts()) == 381
+    assert (lib.root / "partkit-settings.toml").exists() and lib.parts() == []
 
 
 def test_find_parts_add_and_get_cad(win, monkeypatch, tmp_path):
@@ -129,3 +129,49 @@ def test_key_fields_only_for_suppliers_in_the_list(win):
     win.load_settings()
     form = win.settings_form
     assert form.isRowVisible(win.key_rows["Mouser"]) and not form.isRowVisible(win.key_rows["DigiKey"])
+
+
+def test_value_results_one_row_per_part_with_filters(win):
+    from partkit.search import SearchResult
+    from partkit.suppliers import Offer
+    from partkit.valuesearch import parse
+
+    spec = {"Resistance": "1kΩ", "Package / Case": "0603", "Tolerance": "1%", "Power": "0.1W"}
+    offers = [Offer("JLCPCB", "C1", "BASIC1K", stock=100, status="Basic", category="Chip Resistor", specs=spec),
+              Offer("LCSC", "C1", "BASIC1K", stock=100, category="Chip Resistor", specs=spec),
+              Offer("JLCPCB", "C2", "EXT1K", stock=5, status="Extended", category="Chip Resistor", specs=spec),
+              Offer("JLCPCB", "C3", "GONE1K", stock=0, status="Extended", category="Chip Resistor", specs=spec)]
+    win.lib.settings.suppliers = ["JLCPCB", "LCSC"]
+    win.show_results(SearchResult(mpn="1k 0603", offers=offers, query=parse("1k 0603")))
+    assert win.results.rowCount() == 2  # C1 merged, C3 out of stock hidden
+    cols = {win.results.horizontalHeaderItem(c).text(): c for c in range(win.results.columnCount())}
+    assert win.results.item(0, cols["Sold by"]).text() == "JLCPCB, LCSC"
+    assert win.results.item(0, cols["Value"]).text() == "1kΩ"
+    win.only_basic.setChecked(True)
+    assert win.results.rowCount() == 1
+    win.only_basic.setChecked(False)
+    win.narrow.setText("ext")
+    assert win.results.rowCount() == 1 and win.results.item(0, 0).text() == "EXT1K"
+    win.narrow.setText("")
+    win.results.selectRow(1)
+    win.add_result()
+    p = win.lib.get(win.results.item(1, 0).text())
+    assert p and p.params["Supplier 2"] == "LCSC"
+
+
+def test_i_buy_from_setting(win):
+    win.buy_from.setCurrentText("JLCPCB")
+    win.also_check.setCurrentText("Mouser")
+    assert win.settings_form.isRowVisible(win.key_rows["Mouser"])
+    win.save_settings()
+    assert Library(win.lib.root).settings.suppliers == ["JLCPCB", "Mouser"]
+    win.also_check.setCurrentText("None")
+    win.save_settings()
+    assert Library(win.lib.root).settings.suppliers == ["JLCPCB"]
+    assert not win.settings_form.isRowVisible(win.key_rows["Mouser"])
+
+
+def test_remove_old_starter_parts_button(win):
+    win.lib.save(Part(mpn="OLD1", category="Resistors", source="PartKit"))
+    win.remove_starter()
+    assert win.lib.get("OLD1") is None

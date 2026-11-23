@@ -168,9 +168,11 @@ def test_credentials_from_environment(monkeypatch):
     assert not credentials.is_set_up("DigiKey")
 
 
-def test_old_settings_gain_new_suppliers(tmp_path):
-    save_settings(tmp_path, Settings(suppliers=["Mouser", "DigiKey"]))
-    assert load_settings(tmp_path).suppliers == ["Mouser", "DigiKey", "JLCPCB", "Farnell", "LCSC"]
+def test_settings_keep_your_suppliers_and_drop_unknown_ones(tmp_path):
+    save_settings(tmp_path, Settings(suppliers=["Mouser", "Nope"]))
+    assert load_settings(tmp_path).suppliers == ["Mouser"]
+    save_settings(tmp_path, Settings(suppliers=[]))
+    assert load_settings(tmp_path).suppliers == ["JLCPCB"]
 
 
 def test_no_keys_at_all_is_fine(monkeypatch):

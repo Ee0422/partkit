@@ -21,3 +21,9 @@ jobs:
       - run: pytest -q
         env:
           QT_QPA_PLATFORM: offscreen
+      - name: Live JLCPCB value search (information only)
+        if: runner.os == 'Linux' && matrix.python == '3.12'
+        continue-on-error: true
+        run: pytest -q -s tests/test_valuesearch.py -k live
+        env:
+          PARTKIT_LIVE: "1"

@@ -32,7 +32,7 @@ partkit-gui = "partkit.gui:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-partkit = ["data/*.json", "altium/*"]
+partkit = ["altium/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

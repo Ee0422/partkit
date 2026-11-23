@@ -24,7 +24,6 @@ from .altium_launch import copy_scripts, start_sync
 from .config import HUNTING_MODES, default_library_path, remember_library_path
 from .importer import DOWNLOAD_EXT, STEP_EXT, ImportProblem, attach_step, import_zip
 from .library import Library
-from .passives import install_starter_pack
 
 
 def test_library_path(real: Path) -> Path:
@@ -45,12 +44,21 @@ def _table(headers: list[str]) -> QTableWidget:
     return t
 
 
-def _set_rows(t: QTableWidget, rows: list[list[str]]) -> None:
+def _set_rows(t: QTableWidget, rows: list[list[str]], keep_order: bool = False) -> None:
+    """Fill a table. Column 0 remembers each row's position in `rows`, even after the user sorts.
+
+    keep_order shows rows in the order given (best first) until the user clicks a column.
+    """
     t.setSortingEnabled(False)
     t.setRowCount(len(rows))
     for r, row in enumerate(rows):
         for c, v in enumerate(row):
-            t.setItem(r, c, QTableWidgetItem(str(v)))
+            item = QTableWidgetItem(str(v))
+            if c == 0:
+                item.setData(Qt.UserRole, r)
+            t.setItem(r, c, item)
+    if keep_order:
+        t.horizontalHeader().setSortIndicator(-1, Qt.AscendingOrder)
     t.setSortingEnabled(True)
     t.resizeColumnsToContents()
 
@@ -72,8 +80,6 @@ class SetupDialog(QDialog):
         self.folder = QLineEdit(str(folder or default_library_path()))
         browse = QPushButton("Change…")
         browse.clicked.connect(self._browse)
-        self.starter = QCheckBox("Add the starter pack (366 resistors, 15 capacitors in 0402/0603/0805)")
-        self.starter.setChecked(True)
         intro = QLabel("PartKit keeps your parts in one library folder that every Altium project can use.\n"
                        "The defaults below are fine for most people. Press Start.")
         intro.setWordWrap(True)
@@ -84,7 +90,6 @@ class SetupDialog(QDialog):
         lay.addWidget(intro)
         lay.addWidget(QLabel("Library folder"))
         lay.addLayout(row)
-        lay.addWidget(self.starter)
         buttons = QDialogButtonBox()
         start = buttons.addButton("Start", QDialogButtonBox.AcceptRole)
         start.setDefault(True)
@@ -101,8 +106,6 @@ class SetupDialog(QDialog):
     def run_setup(self) -> Library:
         lib = Library.init(Path(self.folder.text()))
         remember_library_path(lib.root)
-        if self.starter.isChecked():
-            install_starter_pack(lib)
         copy_scripts()
         return lib
 
@@ -170,23 +173,43 @@ class MainWindow(QMainWindow):
         self.refresh_library()
 
     # ----- Find parts tab
+    RESULT_COLUMNS = ["MPN", "Value", "Size", "Tolerance", "Power / Voltage", "Dielectric", "JLCPCB type",
+                      "Stock", "Price @1 (USD)", "Sold by", "Supplier PN", "Manufacturer", "Description"]
+
     def _search_tab(self) -> QWidget:
         w = QWidget()
         lay = QVBoxLayout(w)
         row = QHBoxLayout()
         self.search_box = QLineEdit()
-        self.search_box.setPlaceholderText("Manufacturer part number, e.g. CL10B104KB8NNNC")
+        self.search_box.setPlaceholderText("Part number (CL10B104KB8NNNC) or value (1k 0603 1%, 100nF 0603 50V X7R)")
         self.search_box.returnPressed.connect(self.run_search)
         self.search_btn = QPushButton("Search")
         self.search_btn.clicked.connect(self.run_search)
         row.addWidget(self.search_box)
         row.addWidget(self.search_btn)
         lay.addLayout(row)
-        self.search_msg = QLabel("Searches your preferred suppliers in your order (Settings).")
+        self.search_msg = QLabel("Type a part number, or a resistor or capacitor value to see JLCPCB parts.")
         self.search_msg.setWordWrap(True)
         lay.addWidget(self.search_msg)
-        self.results = _table(["Supplier", "Supplier PN", "MPN", "Manufacturer", "Stock", "Price @1",
-                               "Status", "Description"])
+        filters = QHBoxLayout()
+        self.only_basic = QCheckBox("JLCPCB Basic only")
+        self.only_basic.setToolTip("Basic parts are always loaded on JLCPCB's machines: no extra fee.\n"
+                                   "Extended parts are loaded by hand for your order: about US$3 extra per part type.")
+        self.only_stock = QCheckBox("In stock only")
+        self.only_stock.setChecked(True)
+        self.only_supplier = QComboBox()
+        self.only_supplier.addItem("All suppliers")
+        self.narrow = QLineEdit()
+        self.narrow.setPlaceholderText("Narrow results by typing, e.g. YAGEO or 1%")
+        for wdg in (self.only_basic, self.only_stock):
+            wdg.toggled.connect(self.apply_filters)
+        self.only_supplier.currentTextChanged.connect(self.apply_filters)
+        self.narrow.textChanged.connect(self.apply_filters)
+        for wdg in (self.only_basic, self.only_stock, QLabel("Show:"), self.only_supplier, self.narrow):
+            filters.addWidget(wdg)
+        lay.addLayout(filters)
+        self.results = _table(self.RESULT_COLUMNS)
+        self.results.horizontalHeaderItem(6).setToolTip(self.only_basic.toolTip())
         lay.addWidget(self.results)
         row = QHBoxLayout()
         self.add_cat = QComboBox()
@@ -206,66 +229,121 @@ class MainWindow(QMainWindow):
             row.addWidget(b)
         row.addStretch()
         lay.addLayout(row)
+        self.rows = []
         return w
 
     def run_search(self):
-        mpn = self.search_box.text().strip()
-        if not mpn:
+        text = self.search_box.text().strip()
+        if not text:
             return
         self.search_btn.setEnabled(False)
-        self.search_msg.setText(f"Searching for {mpn}…")
+        self.search_msg.setText(f"Searching for {text}…")
         settings = self.lib.settings
         import threading
 
-        from .search import find
+        from .search import find_any
 
         def work():
             try:
-                res = find(mpn, settings)
+                res = find_any(text, settings)
             except Exception as e:  # noqa: BLE001 - never let a search crash the window
                 from .search import SearchResult
 
-                res = SearchResult(mpn=mpn, messages=[f"Search failed: {e}"])
+                res = SearchResult(mpn=text, messages=[f"Search failed: {e}"])
             self.bridge.searched.emit(res)
 
         threading.Thread(target=work, daemon=True).start()
 
     def show_results(self, res):
+        from .search import merge_rows
+
         self.search_btn.setEnabled(True)
         self.last_search = res
-        self.offers = res.exact or res.offers
-        rows = []
-        for o in self.offers:
-            price = o.unit_price(1)
-            rows.append([o.supplier, o.supplier_pn, o.mpn, o.manufacturer,
-                         "" if o.stock is None else f"{o.stock:,}",
-                         "" if price is None else f"{price:g} {o.currency}".strip(), o.status, o.description])
-        _set_rows(self.results, rows)
-        msgs = list(res.messages)
-        if self.offers:
-            msgs.insert(0, f"Found {len(self.offers)} offer(s) for {res.mpn}.")
-        self.search_msg.setText("\n".join(msgs) or f"No results for {res.mpn}.")
+        offers = res.exact or res.offers
+        self.offers = offers
+        self.rows = merge_rows(offers, self.lib.settings.suppliers)
+        names = sorted({n for r in self.rows for n in r.sold_by})
+        current = self.only_supplier.currentText()
+        self.only_supplier.blockSignals(True)
+        self.only_supplier.clear()
+        self.only_supplier.addItems(["All suppliers"] + [f"{n} only" for n in names])
+        if current in [self.only_supplier.itemText(i) for i in range(self.only_supplier.count())]:
+            self.only_supplier.setCurrentText(current)
+        self.only_supplier.blockSignals(False)
+        self.result_messages = list(res.messages)
+        self.apply_filters()
         self.cad_list, self.cad_index = [], -1
         self.next_btn.setEnabled(False)
 
-    def _search_mpn(self) -> str:
+    def _row_passes(self, r) -> bool:
+        if self.only_basic.isChecked() and r.offer.status != "Basic":
+            return False
+        if self.only_stock.isChecked() and r.offer.stock is not None and r.offer.stock <= 0:
+            return False
+        sup = self.only_supplier.currentText()
+        if sup.endswith(" only") and sup[:-5] not in r.sold_by:
+            return False
+        words = self.narrow.text().lower().split()
+        if words:
+            hay = " ".join([r.mpn, r.offer.manufacturer, r.offer.description, r.offer.supplier_pn,
+                            *r.specs.values()]).lower()
+            if not all(w in hay for w in words):
+                return False
+        return True
+
+    def apply_filters(self, *_):
+        self.visible = [r for r in getattr(self, "rows", []) if self._row_passes(r)]
+        table = []
+        for r in self.visible:
+            o = r.offer
+            price = o.unit_price(1)
+            table.append([r.mpn, r.value(), r.specs.get("Size", ""), r.specs.get("Tolerance", ""), r.rating(),
+                          r.specs.get("Dielectric", ""), o.status if "JLCPCB" in r.sold_by else "",
+                          "" if o.stock is None else f"{o.stock:,}",
+                          "" if price is None else f"{price:g}", ", ".join(r.sold_by), o.supplier_pn,
+                          o.manufacturer, o.description])
+        _set_rows(self.results, table, keep_order=True)
+        msgs = list(getattr(self, "result_messages", []))
+        res = getattr(self, "last_search", None)
+        if self.rows and res is not None and res.query is None:
+            msgs.insert(0, f"Found {len(self.rows)} part(s) for {res.mpn}.")
+        hidden = len(self.rows) - len(self.visible)
+        if hidden:
+            msgs.append(f"{hidden} more hidden by the filters above.")
+        self.search_msg.setText("\n".join(msgs) or (f"No results for {res.mpn}." if res else ""))
+
+    def _selected_row(self):
         rows = sorted({i.row() for i in self.results.selectedIndexes()})
         if rows:
-            return self.results.item(rows[0], 2).text()
-        if self.offers:
-            return self.offers[0].mpn
-        return self.search_box.text().strip()
+            idx = self.results.item(rows[0], 0).data(Qt.UserRole)
+            if idx is not None and idx < len(self.visible):
+                return self.visible[idx]
+        return None
+
+    def _search_mpn(self) -> str:
+        r = self._selected_row()
+        if r:
+            return r.mpn
+        visible = getattr(self, "visible", [])
+        if visible and getattr(self, "last_search", None) is not None and self.last_search.query is None:
+            return visible[0].mpn
+        text = self.search_box.text().strip()
+        from .valuesearch import parse
+
+        return "" if parse(text) else text
 
     def add_result(self):
-        from .search import add_from_search
+        from .search import add_from_search, offers_for
 
-        res = getattr(self, "last_search", None)
-        mpn = self._search_mpn()
+        r = self._selected_row()
+        if r is None and getattr(self, "last_search", None) is not None and self.last_search.query is None:
+            r = (getattr(self, "visible", []) or [None])[0]
+        mpn = r.mpn if r else self._search_mpn()
         if not mpn:
-            QMessageBox.information(self, "PartKit", "Type a manufacturer part number first.")
+            QMessageBox.information(self, "PartKit", "Pick a part in the results first.")
             return
-        # without supplier keys the part is added with just its MPN; the CAD file fills in the rest
-        offers = [o for o in res.best() if o.mpn == mpn] or res.best() if res and res.offers else []
+        # without supplier results the part is added with just its MPN; the CAD file fills in the rest
+        offers = offers_for(r, self.lib.settings.suppliers) if r else []
         cat = self.add_cat.currentText()
         part = add_from_search(self.lib, mpn, offers, category=None if cat.startswith("Let") else cat)
         self.log(f"{part.mpn} added to Review as {part.category}. Click 'Get CAD files' next.")
@@ -282,7 +360,7 @@ class MainWindow(QMainWindow):
 
         mpn = self._search_mpn()
         if not mpn:
-            QMessageBox.information(self, "PartKit", "Search for a part first.")
+            QMessageBox.information(self, "PartKit", "Pick a part in the results first.")
             return
         if not next_ or not self.cad_list:
             datasheet = next((o.datasheet for o in self.offers if o.mpn == mpn and o.datasheet), "")
@@ -310,11 +388,11 @@ class MainWindow(QMainWindow):
 
         from .suppliers import supplier_link
 
-        rows = sorted({i.row() for i in self.results.selectedIndexes()})
-        if rows and rows[0] < len(self.offers) and self.offers[rows[0]].url:
-            webbrowser.open(self.offers[rows[0]].url)
+        r = self._selected_row()
+        if r and r.offer.url:
+            webbrowser.open(r.offer.url)
             return
-        name = self.lib.settings.suppliers[0] if self.lib.settings.suppliers else "DigiKey"
+        name = self.lib.settings.suppliers[0] if self.lib.settings.suppliers else "JLCPCB"
         mpn = self._search_mpn()
         if mpn:
             webbrowser.open(supplier_link(name, mpn))
@@ -550,15 +628,25 @@ class MainWindow(QMainWindow):
         lay = QVBoxLayout(w)
         b = QPushButton("Run health check")
         b.clicked.connect(self.run_check)
+        self.remove_starter_btn = QPushButton("Remove old starter parts")
+        self.remove_starter_btn.setToolTip("Older PartKit versions added 381 passives with footprints nobody "
+                                           "checked. This takes them out (copies are kept).")
+        self.remove_starter_btn.clicked.connect(self.remove_starter)
         self.health_summary = QLabel("Finds missing BOM fields, missing files and 3D models that need replacing.")
         row = QHBoxLayout()
         row.addWidget(b)
+        row.addWidget(self.remove_starter_btn)
         row.addWidget(self.health_summary)
         row.addStretch()
         lay.addLayout(row)
         self.health_table = _table(["MPN", "Problem", "Fix"])
         lay.addWidget(self.health_table)
         return w
+
+    def remove_starter(self):
+        n = self.lib.remove_starter_parts()
+        self.log(f"Removed {n} old starter parts (copies kept in partkit-data/history).")
+        self.run_check()
 
     def run_check(self):
         issues = self.lib.health_check()
@@ -579,21 +667,35 @@ class MainWindow(QMainWindow):
         form.addRow("Hunt beyond preferred providers", self.hunting)
         self.skip_review = QCheckBox("Skip the Review stage (release parts straight away)")
         form.addRow(self.skip_review)
-        self.suppliers = QListWidget()
-        self.suppliers.setDragDropMode(QAbstractItemView.InternalMove)
-        self.suppliers.setMaximumHeight(90)
-        form.addRow("Supplier order (drag to reorder)", self.suppliers)
+        from .config import ALL_SUPPLIERS
+
+        self.buy_from = QComboBox()
+        self.buy_from.addItems(ALL_SUPPLIERS)
+        self.also_check = QComboBox()
+        self.also_check.addItems(["None"] + ALL_SUPPLIERS)
+        self.buy_from.currentTextChanged.connect(self._suppliers_changed)
+        self.also_check.currentTextChanged.connect(self._suppliers_changed)
+        form.addRow("I buy from", self.buy_from)
+        form.addRow("Also compare with (optional)", self.also_check)
         self.providers = QListWidget()
-        self.providers.setDragDropMode(QAbstractItemView.InternalMove)
         self.providers.setMaximumHeight(90)
-        form.addRow("Model provider order (drag to reorder)", self.providers)
+        prov = QHBoxLayout()
+        prov.addWidget(self.providers)
+        updown = QVBoxLayout()
+        up, down = QPushButton("Move up"), QPushButton("Move down")
+        up.clicked.connect(self.provider_up)
+        down.clicked.connect(self.provider_down)
+        updown.addWidget(up)
+        updown.addWidget(down)
+        prov.addLayout(updown)
+        form.addRow("CAD provider order (first is tried first)", prov)
         from . import credentials
 
         self.key_fields = {}
         self.key_rows = {}
         self.settings_form = form
         note = QLabel("JLCPCB and LCSC need no key. DigiKey, Mouser and Farnell need a free key, asked "
-                      "for only when they're in your supplier list, and optional even then.")
+                      "for only when you choose them above, and optional even then.")
         note.setWordWrap(True)
         form.addRow("Supplier keys", note)
         for sup, needed in credentials.NEEDED.items():
@@ -638,8 +740,12 @@ class MainWindow(QMainWindow):
         self.watch_folder.setText(s.watch_folder)
         self.hunting.setCurrentText(s.hunting)
         self.skip_review.setChecked(s.skip_review)
-        self.suppliers.clear()
-        self.suppliers.addItems(s.suppliers)
+        self.buy_from.blockSignals(True)
+        self.also_check.blockSignals(True)
+        self.buy_from.setCurrentText(s.suppliers[0] if s.suppliers else "JLCPCB")
+        self.also_check.setCurrentText(s.suppliers[1] if len(s.suppliers) > 1 else "None")
+        self.buy_from.blockSignals(False)
+        self.also_check.blockSignals(False)
         self.providers.clear()
         self.providers.addItems(s.providers)
         self.dk_site.setText(s.digikey_site)
@@ -647,8 +753,7 @@ class MainWindow(QMainWindow):
         self.farnell_store.setText(s.farnell_store)
         from . import credentials
 
-        for sup, row in self.key_rows.items():
-            self.settings_form.setRowVisible(row, sup in s.suppliers)
+        self._show_key_rows(s.suppliers)
         for (sup, field), le in self.key_fields.items():
             le.clear()
             le.setPlaceholderText(("saved" if credentials.get(sup, field) else "not set") + f": {field.replace('_', ' ')}")
@@ -661,12 +766,41 @@ class MainWindow(QMainWindow):
             self.targets.setItem(r, 2, QTableWidgetItem(pcb))
         self.targets.resizeColumnsToContents()
 
+    def _move_provider(self, step: int):
+        i = self.providers.currentRow()
+        j = i + step
+        if i < 0 or not 0 <= j < self.providers.count():
+            return
+        item = self.providers.takeItem(i)
+        self.providers.insertItem(j, item)
+        self.providers.setCurrentRow(j)
+
+    def provider_up(self):
+        self._move_provider(-1)
+
+    def provider_down(self):
+        self._move_provider(1)
+
+    def _chosen_suppliers(self) -> list[str]:
+        out = [self.buy_from.currentText()]
+        second = self.also_check.currentText()
+        if second != "None" and second not in out:
+            out.append(second)
+        return out
+
+    def _show_key_rows(self, suppliers: list[str]):
+        for sup, row in self.key_rows.items():
+            self.settings_form.setRowVisible(row, sup in suppliers)
+
+    def _suppliers_changed(self, *_):
+        self._show_key_rows(self._chosen_suppliers())
+
     def save_settings(self):
         s = self.lib.settings
         s.watch_folder = self.watch_folder.text().strip()
         s.hunting = self.hunting.currentText()
         s.skip_review = self.skip_review.isChecked()
-        s.suppliers = [self.suppliers.item(i).text() for i in range(self.suppliers.count())]
+        s.suppliers = self._chosen_suppliers()
         s.providers = [self.providers.item(i).text() for i in range(self.providers.count())]
         s.digikey_site = self.dk_site.text().strip() or "US"
         s.digikey_currency = self.dk_currency.text().strip() or "USD"
@@ -729,8 +863,8 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         lib = dlg.run_setup()
         root = lib.root
-        QMessageBox.information(None, "PartKit", "Your library is ready. Press 'Send to Altium' to write the "
-                                "starter pack into Altium.")
+        QMessageBox.information(None, "PartKit", "Your library is ready. Start on 'Find parts': search for "
+                                "a part, add it, then get its CAD files.")
     win = MainWindow(root)
     win.show()
     return app.exec()

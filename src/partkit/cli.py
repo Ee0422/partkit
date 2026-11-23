@@ -15,7 +15,6 @@ from . import fields as F
 from .config import HUNTING_MODES, default_library_path, remember_library_path
 from .importer import ImportProblem, attach_step, import_zip
 from .library import Library
-from .passives import install_starter_pack
 
 app = typer.Typer(add_completion=False, help="PartKit: find, import and manage Altium parts.")
 console = Console()
@@ -51,20 +50,17 @@ def main(
 
 
 @app.command()
-def init(starter: bool = typer.Option(True, help="Add the starter-pack passives.")):
+def init():
     """Create the library folder with good defaults."""
     root = library_root()
-    lib = Library.init(root)
+    Library.init(root)
     if not _state["test"]:
         remember_library_path(root)
     console.print(f"Library ready at [bold]{root}[/]")
-    if starter:
-        added, skipped = install_starter_pack(lib)
-        console.print(f"Starter pack: {added} passives added, {skipped} already there.")
     from .altium_launch import copy_scripts
 
     console.print(f"Altium script copied to {copy_scripts().parent}")
-    console.print("Next: run [bold]partkit sync[/] to write the libraries into Altium.")
+    console.print("Next: search for a part with [bold]partkit search[/], or open the PartKit window.")
 
 
 @app.command("import")
@@ -248,26 +244,34 @@ def keys(supplier: str = typer.Argument(..., help="DigiKey, Mouser or Farnell"))
     console.print(f"{name} is {'set up' if credentials.is_set_up(name) else 'not set up'}.")
 
 
-def _offers_table(offers) -> Table:
-    t = Table("Supplier", "Supplier PN", "MPN", "Manufacturer", "Stock", "Price @1", "Description")
-    for o in offers:
+def _rows_table(rows) -> Table:
+    t = Table("MPN", "Value", "Size", "Tol.", "Rating", "Dielectric", "JLCPCB", "Stock", "Price @1",
+              "Sold by", "Supplier PN")
+    for r in rows:
+        o = r.offer
         price = o.unit_price(1)
-        t.add_row(o.supplier, o.supplier_pn, o.mpn, o.manufacturer,
-                  "" if o.stock is None else f"{o.stock:,}",
-                  "" if price is None else f"{price:g} {o.currency}".strip(), o.description)
+        t.add_row(r.mpn, r.value(), r.specs.get("Size", ""), r.specs.get("Tolerance", ""), r.rating(),
+                  r.specs.get("Dielectric", ""), o.status if "JLCPCB" in r.sold_by else "",
+                  "" if o.stock is None else f"{o.stock:,}", "" if price is None else f"{price:g}",
+                  ", ".join(r.sold_by), o.supplier_pn)
     return t
 
 
 @app.command("search")
-def search_cmd(mpn: str):
-    """Look a part up at your preferred suppliers."""
-    from .search import find
+def search_cmd(text: str = typer.Argument(..., help="A part number, or a value such as '1k 0603 1%'"),
+               basic: bool = typer.Option(False, "--basic", help="Only JLCPCB Basic parts.")):
+    """Look a part up at your suppliers, or find JLCPCB resistors and capacitors by value."""
+    from .search import find_any, merge_rows
 
-    res = find(mpn, open_lib().settings)
+    lib = open_lib()
+    res = find_any(text, lib.settings)
     for m in res.messages:
         console.print(f"[yellow]{m}[/]")
-    if res.offers:
-        console.print(_offers_table(res.exact or res.offers))
+    rows = merge_rows(res.exact or res.offers, lib.settings.suppliers)
+    if basic:
+        rows = [r for r in rows if r.offer.status == "Basic"]
+    if rows:
+        console.print(_rows_table(rows[:30]))
 
 
 @app.command()
@@ -335,6 +339,16 @@ def set_hunting(mode: str = typer.Argument(..., help="off, ask or always")):
     lib.settings.hunting = mode
     lib.save_settings()
     console.print(f"Hunting set to {mode}.")
+
+
+@app.command("remove-starter")
+def remove_starter():
+    """Take out the unchecked starter passives that older PartKit versions added."""
+    n = open_lib().remove_starter_parts()
+    console.print(f"Removed {n} starter parts (copies kept in partkit-data/history).")
+    if n:
+        console.print("In Altium you can also delete Libraries/Generic Passives.SchLib and .PcbLib "
+                      "if no project uses them.")
 
 
 @app.command("test-reset")

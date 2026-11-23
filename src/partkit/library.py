@@ -133,6 +133,21 @@ class Library:
         tmp.write_text(json.dumps(asdict(part), indent=2, ensure_ascii=False), encoding="utf-8")
         os.replace(tmp, path)
 
+    def remove_starter_parts(self) -> int:
+        """Take out the unchecked starter passives older PartKit versions added. Returns how many.
+
+        Each one is kept in partkit-data/history, so nothing is lost for good.
+        """
+        removed = 0
+        for part in self.parts():
+            if part.source != "PartKit":
+                continue
+            path = self._part_path(part.mpn)
+            hist = self.root / "partkit-data" / "history" / f"{path.stem}.removed.{time.time_ns()}.json"
+            shutil.move(str(path), hist)
+            removed += 1
+        return removed
+
     def undo(self, mpn: str) -> Part | None:
         """Restore the previous saved version of a part. Returns it, or None."""
         stem = self._part_path(mpn).stem
@@ -163,7 +178,10 @@ class Library:
     # ---------- stages ----------
     def approve(self, mpn: str) -> Part:
         part = self._require(mpn)
-        if part.source != "PartKit" and not (part.symbol and part.footprint):
+        if part.source == "PartKit":
+            raise KeyError(f"{mpn} is an old PartKit starter part whose footprint was never checked. "
+                           "Remove it (partkit remove-starter) and add a checked part instead.")
+        if not (part.symbol and part.footprint):
             raise KeyError(f"{mpn} has no symbol or footprint yet. Get its CAD files first "
                            "(Search > Get CAD files, or import a download).")
         part.stage = "Released"
@@ -190,6 +208,10 @@ class Library:
     def health_check(self) -> list[Issue]:
         issues: list[Issue] = []
         for part in self.parts():
+            if part.source == "PartKit":
+                issues.append(Issue(part.mpn, "Old PartKit starter part (footprint never checked)",
+                                    "Click 'Remove old starter parts' (or run partkit remove-starter), then add a checked part"))
+                continue
             bp = part.bom_params()
             missing = [f for f in F.REQUIRED_FOR_BOM if not bp.get(f)]
             if missing:
@@ -222,14 +244,6 @@ class Library:
         if not pending:
             return None
         lines = ["# PartKit sync job", f"LIBRARY_ROOT={self.root.resolve()}"]
-        from .passives import footprints_needed  # local import: passives imports this module
-
-        for fp in footprints_needed(pending):
-            lines.append("[FOOTPRINT]")
-            lines.append(f"PCBLIB={_generic_pcblib()}")
-            for k, v in fp.items():
-                lines.append(f"{k.upper()}={v}")
-            lines.append("[END]")
         for p in pending:
             lines.append("[PART]")
             stage = "Released" if self.settings.skip_review and p.stage == "Review" else p.stage
@@ -241,7 +255,7 @@ class Library:
                 ("STEP", p.step), ("MODEL3D", p.model_3d_source),
                 ("BOX_MM", ",".join(f"{x:g}" for x in p.box_mm)),
                 ("COMPONENT_NAME", F.display_name(p.params, p.category) or p.mpn),
-                ("GENERIC", "1" if p.source == "PartKit" else "0"),
+                ("GENERIC", "0"),
                 ("DESIGNATOR", F.DESIGNATOR_PREFIX.get(p.category, "U") + "?"),
             ):
                 lines.append(f"{k}={_clean(v)}")
@@ -287,12 +301,6 @@ def _point_altium_at(job: Path) -> None:
         (d / "current-job.txt").write_text(str(job.resolve()), encoding="utf-8")
     except OSError:
         pass  # Sync falls back to asking for the file
-
-
-def _generic_pcblib() -> str:
-    from .passives import GENERIC_PCBLIB
-
-    return GENERIC_PCBLIB
 
 
 def _clean(v) -> str:
