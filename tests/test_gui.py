@@ -108,3 +108,17 @@ def test_search_messages_without_keys(win):
 
     win.show_results(SearchResult(mpn="X", messages=["Add a free API key in Settings for: DigiKey."]))
     assert "API key" in win.search_msg.text() and win.results.rowCount() == 0
+
+
+def test_get_cad_works_without_any_supplier_keys(win, monkeypatch):
+    from partkit import providers
+
+    opened = []
+    monkeypatch.setattr(providers, "open_source", lambda src, opener=None: opened.append(src.url))
+    monkeypatch.setattr(win, "toggle_watch", lambda on: None)
+    win.search_box.setText("LM358DR")
+    win.add_cat.setCurrentText("ICs")
+    win.get_cad(next_=False)
+    p = win.lib.get("LM358DR")
+    assert p and p.category == "ICs" and p.target_schlib == "Libraries/ICs.SchLib"
+    assert "LM358DR" in opened[0]

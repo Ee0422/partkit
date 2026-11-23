@@ -280,8 +280,8 @@ def add(mpn: str, category: Optional[str] = typer.Option(None, help="Leave out t
     res = find(mpn, lib.settings)
     for m in res.messages:
         console.print(f"[yellow]{m}[/]")
-    if not res.offers:
-        console.print(f"[red]{mpn} wasn't found, so nothing was added.[/]")
+    if not res.offers and not res.not_set_up:
+        console.print(f"[red]{mpn} wasn't found at your suppliers, so nothing was added.[/]")
         raise typer.Exit(1)
     part = add_from_search(lib, mpn, res.best(), category=category)
     console.print(f"{part.mpn} added to Review as {part.category}. Next: [bold]partkit cad {part.mpn}[/]")

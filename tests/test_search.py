@@ -171,3 +171,9 @@ def test_credentials_from_environment(monkeypatch):
 def test_old_settings_gain_new_suppliers(tmp_path):
     save_settings(tmp_path, Settings(suppliers=["Mouser", "DigiKey"]))
     assert load_settings(tmp_path).suppliers == ["Mouser", "DigiKey", "Farnell", "LCSC"]
+
+
+def test_no_keys_at_all_is_fine(monkeypatch):
+    monkeypatch.setattr(credentials, "is_set_up", lambda name: False)
+    res = search.find("LM358DR", Settings())
+    assert any("that's fine" in m and "Get CAD files" in m for m in res.messages)

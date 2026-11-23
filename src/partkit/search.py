@@ -74,7 +74,12 @@ def find(mpn: str, settings: Settings, http: Http = default_http, clients: dict 
         if not found:
             res.messages.append(f"{name}: no match for {res.mpn}")
     if res.not_set_up and not res.offers:
-        res.messages.append("Add a free API key in Settings for: " + ", ".join(res.not_set_up) + ".")
+        if len(res.not_set_up) == len([n for n in settings.suppliers if n in SUPPLIERS]):
+            res.messages.append(
+                "No supplier keys set up, and that's fine: click Get CAD files to fetch the part. "
+                "(Optional: a free Mouser key also fills in supplier numbers, stock and price.)")
+        else:
+            res.messages.append("Not searched (no key yet, optional): " + ", ".join(res.not_set_up) + ".")
     return res
 
 

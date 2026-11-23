@@ -260,11 +260,12 @@ class MainWindow(QMainWindow):
         from .search import add_from_search
 
         res = getattr(self, "last_search", None)
-        if not res or not res.offers:
-            QMessageBox.information(self, "PartKit", "Search for a part first.")
-            return
         mpn = self._search_mpn()
-        offers = [o for o in res.best() if o.mpn == mpn] or res.best()
+        if not mpn:
+            QMessageBox.information(self, "PartKit", "Type a manufacturer part number first.")
+            return
+        # without supplier keys the part is added with just its MPN; the CAD file fills in the rest
+        offers = [o for o in res.best() if o.mpn == mpn] or res.best() if res and res.offers else []
         cat = self.add_cat.currentText()
         part = add_from_search(self.lib, mpn, offers, category=None if cat.startswith("Let") else cat)
         self.log(f"{part.mpn} added to Review as {part.category}. Click 'Get CAD files' next.")
@@ -295,7 +296,7 @@ class MainWindow(QMainWindow):
             self.next_btn.setEnabled(False)
             return
         src = self.cad_list[self.cad_index]
-        if not self.lib.get(mpn) and getattr(self, "last_search", None) and self.last_search.offers:
+        if not self.lib.get(mpn):
             self.add_result()
         if hasattr(self, "watch_box") and not self.watch_box.isChecked():
             self.watch_box.setChecked(True)  # so the download imports by itself

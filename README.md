@@ -65,9 +65,11 @@ partkit --help       # the command line
    (SnapMagic, SamacSys, Ultra Librarian); download the Altium files there and
    PartKit imports them. If that provider doesn't have the part, click
    **Try next provider**. With hunting on, wider searches follow your list.
-   Searching needs a free API key from each supplier you want to use
-   (*Settings*, "Get a free key"). Keys stay in Windows Credential Manager.
-   Your starter pack and imports work without any keys.
+   **No API keys are needed.** Without them, Get CAD files still opens the
+   part, and the CAD file fills in Manufacturer, MPN and Description. A
+   supplier key is optional and adds supplier numbers, stock, price and
+   specs. Mouser's is the quickest to get (one form, key by email); add it in
+   *Settings*. Keys stay in Windows Credential Manager.
 2. **Import.** Drop CAD zips or .IntLib files on the window, or tick *Watch my Downloads folder*.
 3. **Review.** On the Library tab, check the part, set its category and click
    **Approve**.
