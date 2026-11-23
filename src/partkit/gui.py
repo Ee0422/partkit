@@ -332,9 +332,9 @@ class NewProjectDialog(QDialog):
         self._mode()
 
     def _choose_folder(self):
-        f, _ = QFileDialog.getOpenFileName(self, "Your board's Altium project (or its library)",
+        f, _ = QFileDialog.getOpenFileName(self, "Your board's Altium project",
                                            self.lib_folder.text(),
-                                           "Altium project or library (*.PrjPcb *.SchLib *.PcbLib)")
+                                           "Altium project (*.PrjPcb)")
         if f:
             self.lib_folder.setText(f)
             if not self.name.text().strip():
@@ -1011,7 +1011,7 @@ class MainWindow(QMainWindow):
         self.proj_folder = QLabel("")
         folder_btn = QPushButton("Choose Altium project…")
         folder_btn.setToolTip("Pick your board's .PrjPcb: PartKit uses the .SchLib/.PcbLib already in it.\n"
-                              "You can also pick a .SchLib or .PcbLib file.")
+                              "If it has none, PartKit makes new ones next to it.")
         folder_btn.clicked.connect(self.change_project_folder)
         self.proj_status = QLabel("")
         resend = QPushButton("Re-send all parts")
@@ -1232,8 +1232,8 @@ class MainWindow(QMainWindow):
             self.show_kit()
 
     def _pick_altium_project(self, start: str = "") -> str:
-        f, _ = QFileDialog.getOpenFileName(self, "Your board's Altium project (or its library)", start,
-                                           "Altium project or library (*.PrjPcb *.SchLib *.PcbLib)")
+        f, _ = QFileDialog.getOpenFileName(self, "Your board's Altium project", start,
+                                           "Altium project (*.PrjPcb)")
         return f
 
     def _choose_files(self, path: str):
