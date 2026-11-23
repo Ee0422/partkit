@@ -175,7 +175,8 @@ def test_old_settings_gain_new_suppliers(tmp_path):
 
 def test_no_keys_at_all_is_fine(monkeypatch):
     monkeypatch.setattr(credentials, "is_set_up", lambda name: False)
-    res = search.find("LM358DR", Settings(suppliers=["DigiKey", "Mouser"])  # only suppliers that need keys; no network)
+    # only suppliers that need keys, so the test never touches the network
+    res = search.find("LM358DR", Settings(suppliers=["DigiKey", "Mouser"]))
     assert any("that's fine" in m and "Get CAD files" in m for m in res.messages)
 
 
