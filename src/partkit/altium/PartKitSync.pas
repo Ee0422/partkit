@@ -116,13 +116,21 @@ end;
   PartKit's libraries must not change your project, unless the library is that
   project's own (CurrentPrj). Wrapped in try, so an older Altium just skips it. }
 procedure KeepOutOfProject(Path : String);
-var Prj : IProject;
+var Ws : IWorkspace; Prj : IProject; I : Integer;
 begin
   try
-    Prj := GetWorkspace.DM_FocusedProject;
-    if Prj = nil then Exit;
-    if (CurrentPrj <> '') and SameText(Prj.DM_ProjectFullPath, CurrentPrj) then Exit;
-    Prj.DM_RemoveSourceDocument(Path);
+    Ws := GetWorkspace;
+    if Ws = nil then Exit;
+    for I := 0 to Ws.DM_ProjectCount - 1 do
+    begin
+      Prj := Ws.DM_Projects(I);
+      if Prj = nil then Continue;
+      if (CurrentPrj <> '') and SameText(Prj.DM_ProjectFullPath, CurrentPrj) then Continue;
+      try
+        Prj.DM_RemoveSourceDocument(Path);
+      except
+      end;
+    end;
   except
   end;
 end;
@@ -142,7 +150,10 @@ begin
     if Doc = nil then Exit;
     Doc.DoSafeChangeFileNameAndSave(Path, 'SCHLIB');
     KeepOutOfProject(Path);
-  end;
+    Remember(Sources, Path);
+  end
+  else
+    NoteSource(Path);  { not open before: close it again at the end, so it doesn't pile up in Altium }
   Doc := Client.OpenDocument('SCHLIB', Path);
   if Doc = nil then Exit;
   Client.ShowDocument(Doc);
@@ -392,7 +403,10 @@ begin
     if Doc = nil then Exit;
     Doc.DoSafeChangeFileNameAndSave(Path, 'PCBLIB');
     KeepOutOfProject(Path);
-  end;
+    Remember(Sources, Path);
+  end
+  else
+    NoteSource(Path);  { not open before: close it again at the end, so it doesn't pile up in Altium }
   Doc := Client.OpenDocument('PCBLIB', Path);
   if Doc = nil then Exit;
   Client.ShowDocument(Doc);
