@@ -36,3 +36,5 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/PartKit-Setup-*.exe
+          prerelease: ${{ contains(github.ref, '-') }}  # v1.0.0-rc1 is a test release
+          body_path: CHANGELOG.md

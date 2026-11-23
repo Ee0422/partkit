@@ -8,9 +8,12 @@ Altium libraries you choose, together with their 3D models, and makes sure every
 part carries the same BOM fields. You build one checked library that every
 project uses.
 
-> **Status: early development.** It has a desktop window, an installer build, and
-> starts the Altium script for you. Importing SnapMagic downloads into Altium
-> Designer 26 works. Supplier search (JLCPCB with no key) is being tested now.
+> **Version 1.0.** Tested with Altium Designer 26 on Windows. See
+> [What's in 1.0](CHANGELOG.md).
+>
+> **First start:** the installer isn't code-signed yet, so Windows may show
+> "Windows protected your PC". Click **More info**, then **Run anyway**. The
+> source is all here, and every installer is built by GitHub from it.
 
 ## What it does
 
@@ -160,9 +163,9 @@ throwaway library.
 2. Desktop window, installer, automatic start of PartKit Sync (code signing to follow)
 3. Supplier search (JLCPCB and LCSC with no key, DigiKey, Mouser, Farnell), value search, hunting
 4. Reuse checked parts, favourites, templates
-5. Simpler layout, projects with their own libraries (this release)
-6. Import your existing Altium libraries
-7. Version 1.0
+5. Simpler layout, projects with their own libraries
+6. Version 1.0 (this release)
+7. Next: code-signed installer, import your existing Altium libraries, JLCPCB assembly files
 
 ## Licence
 

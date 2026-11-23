@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "partkit"
-version = "0.1.0"
+version = "1.0.0"
 description = "Find, import and manage Altium Designer parts: CAD zips, 3D models, reusable passives and clean BOMs."
 readme = "README.md"
 license = { text = "MIT" }

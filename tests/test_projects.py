@@ -199,3 +199,13 @@ def test_folder_with_one_altium_project_uses_that_project(lib, tmp_path):
     assert sch.endswith("Testing_Script.SchLib") and pcb.endswith("Testing_Script.PcbLib")
     proj = projects.create(lib, "Board", folder=str(tmp_path), pcblib=pcbs[0])
     assert proj.prjpcb.endswith("Testing_Script.PrjPcb")
+
+
+def test_send_with_nothing_ready_says_which_parts_wait(lib):
+    assert "up to date" in lib.nothing_to_send_reason()
+    lib.save(Part(mpn="KT-0603R", stage="To check"))
+    projects.create(lib, "Testing2", own_library=True)
+    projects.add_parts(lib, "Testing2", ["KT-0603R"])
+    assert lib.write_sync_job() is None
+    msg = lib.nothing_to_send_reason()
+    assert "KT-0603R (in Testing2) is still To check" in msg and "Mark Ready" in msg

@@ -211,7 +211,7 @@ def sync(start: bool = typer.Option(True, help="Ask Altium to run PartKit Sync a
         console.print(m)
     path = lib.write_sync_job()
     if not path:
-        console.print("[green]Altium libraries are up to date.[/]")
+        console.print(lib.nothing_to_send_reason())
         return
     console.print(f"Sync job written: {path}")
     prjscr = copy_scripts()
