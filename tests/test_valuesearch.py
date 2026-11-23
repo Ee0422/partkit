@@ -109,7 +109,7 @@ def test_added_resistor_waits_for_cad_files(lib):
 
 
 @pytest.mark.skipif(not os.environ.get("PARTKIT_LIVE"), reason="talks to jlcsearch; set PARTKIT_LIVE=1")
-@pytest.mark.parametrize("text", ["1k 0603 1%", "100nF 0603 50V X7R", "10uF 0805"])
+@pytest.mark.parametrize("text", ["1k 0603 1%", "100nF 0603 50V X7R", "10uF 0805", "capacitor 0805", "resistor 0603 1%"])
 def test_live_value_search(text):
     offers = V.by_value(V.parse(text))
     print(text, len(offers), [(o.supplier_pn, o.mpn, o.status, o.specs) for o in offers[:3]])
@@ -123,3 +123,13 @@ def test_my_usual_fills_only_what_was_not_typed():
     assert (q.package, q.voltage, q.dielectric) == ("0805", 50.0, "X7R")
     q = V.with_filters(q, {"package": None, "voltage": 16.0, "dielectric": None, "tolerance": None})
     assert (q.package, q.voltage, q.dielectric) == ("", 16.0, "")
+
+
+def test_kind_and_size_without_a_value_lists_parts():
+    q = V.parse("capacitor 0805")
+    assert q.kind == "C" and q.value is None and q.package == "0805"
+    http = FakeHttp({"capacitors/list": CAPS})
+    offers = V.by_value(V.parse("capacitor 0603 X7R"), http)
+    assert [o.supplier_pn for o in offers][:1] == ["C14663"] and len(offers) == 2
+    q = urllib.parse.parse_qs(urllib.parse.urlparse(http.calls[0][1]).query)
+    assert "capacitance" not in q and q["package"] == ["0603"]

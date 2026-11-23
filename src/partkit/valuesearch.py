@@ -28,7 +28,7 @@ _FILLER = {"smd", "chip", "thick", "film", "1/10w", "1/16w", "1/8w", "1/4w"}
 @dataclass
 class ValueQuery:
     kind: str                   # "R" or "C"
-    value: float                # ohms or farads
+    value: float | None         # ohms or farads; None lists every value (e.g. "capacitor 0805")
     package: str = ""
     tolerance: float | None = None   # fraction: 0.01 = 1%
     voltage: float | None = None     # minimum volts
@@ -36,7 +36,10 @@ class ValueQuery:
     dielectric: str = ""
 
     def describe(self) -> str:
-        bits = [format_ohms(self.value) if self.kind == "R" else format_farads(self.value)]
+        if self.value is None:
+            bits = ["any value"]
+        else:
+            bits = [format_ohms(self.value) if self.kind == "R" else format_farads(self.value)]
         if self.package:
             bits.append(self.package)
         if self.tolerance is not None:
@@ -192,9 +195,9 @@ def parse(text: str) -> ValueQuery | None:
             value = float(tok)  # a bare number: ohms, if a resistor word says so
             continue
         return None  # an unknown word: treat the whole thing as a part number
-    if value is None or not kind:
+    if not kind:
         return None
-    if kind == "C" and value >= 1e-3:  # "100" with "cap": nothing sensible
+    if value is not None and kind == "C" and value >= 1e-3:  # "100" with "cap": nothing sensible
         return None
     q.kind, q.value = kind, value
     return q
@@ -265,7 +268,7 @@ def _matches(row: dict, q: ValueQuery) -> bool:
             return False
         if (_f(row.get("number_of_resistors")) or 1) > 1:
             return False
-        if not _close(_f(row.get("resistance")), q.value):
+        if q.value is not None and not _close(_f(row.get("resistance")), q.value):
             return False
         if q.power is not None:
             w = _f(row.get("power_watts"))
@@ -277,7 +280,7 @@ def _matches(row: dict, q: ValueQuery) -> bool:
     else:
         if row.get("is_polarized"):
             return False
-        if not _close(_f(row.get("capacitance_farads")), q.value, rel=0.01):
+        if q.value is not None and not _close(_f(row.get("capacitance_farads")), q.value, rel=0.01):
             return False
         if q.voltage is not None and (_f(row.get("voltage_rating")) or 0) + 1e-9 < q.voltage:
             return False
@@ -306,10 +309,10 @@ def by_value(q: ValueQuery, http: Http = default_http, limit: int = 50) -> list[
     """
     if q.kind == "R":
         path, key = "/resistors/list.json", "resistors"
-        params = {"resistance": f"{q.value:.6g}"}
+        params = {} if q.value is None else {"resistance": f"{q.value:.6g}"}
     else:
         path, key = "/capacitors/list.json", "capacitors"
-        params = {"capacitance": f"{q.value:.6g}"}
+        params = {} if q.value is None else {"capacitance": f"{q.value:.6g}"}
     if q.package:
         params["package"] = q.package
     rows: list[dict] = []
@@ -335,7 +338,11 @@ def _from_text_search(q: ValueQuery, http: Http) -> list[dict]:
     """Back-up route: the plain search, with values read from each description."""
     from .search import _value  # local import: search imports suppliers too
 
-    words = (format_ohms(q.value).replace("Ω", "") if q.kind == "R" else format_farads(q.value).replace("µ", "u"))
+    if q.value is None:
+        words = ""
+    else:
+        words = (format_ohms(q.value).replace("Ω", "") if q.kind == "R"
+                 else format_farads(q.value).replace("µ", "u"))
     text = " ".join(x for x in (words, q.package, "resistor" if q.kind == "R" else "capacitor") if x)
     r = http("GET", f"{BASE}/api/search?{urllib.parse.urlencode({'q': text, 'limit': '100', 'full': 'true'})}",
              {}, None)

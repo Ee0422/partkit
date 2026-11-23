@@ -81,12 +81,17 @@ partkit --help       # the command line
    optional second one. JLCPCB and LCSC need no key: they give the LCSC part number
    (C-number), stock and whether the part is Basic (no extra assembly fee) or
    Extended (about US$3 extra per part type). If a part number isn't in JLCPCB's
-   list, PartKit says so: JLCPCB only lists parts it stocks. **Add to library** fills Manufacturer, Description,
-   Datasheet, both supplier part numbers and the specs that tell same-size
-   parts apart. **Get CAD files** opens your first preferred provider
-   (SnapMagic, SamacSys, Ultra Librarian); download the Altium files there and
-   PartKit imports them. If that provider doesn't have the part, click
-   **Try next provider**. With hunting on, wider searches follow your list.
+   list, PartKit says so: JLCPCB only lists parts it stocks. `capacitor 0805`
+   (no value) lists JLCPCB's 0805 capacitors, Basic first. Pick a part and
+   click **Get CAD files**: it opens your first preferred provider (SnapMagic,
+   SamacSys, Ultra Librarian) and remembers the supplier part you picked.
+   Download the Altium files there: the part then appears in *My parts* once,
+   complete, with its symbol, footprint, 3D model, Manufacturer, Description,
+   Datasheet, supplier part numbers and specs. If the number in the download
+   differs from the one you picked, PartKit asks whether it's the same part. If
+   that provider doesn't have the part, click **Try next provider**; if no one
+   has CAD files, **No CAD files? Use one of my footprints…** makes it on a
+   footprint you've already checked. With hunting on, wider searches follow your list.
    **No API keys are needed.** Without them, Get CAD files still opens the
    part, and the CAD file fills in Manufacturer, MPN and Description. A
    supplier key is optional and adds supplier numbers, stock, price and
@@ -121,7 +126,7 @@ throwaway library.
 | `init` | Create the library folder |
 | `keys <supplier>` | Save a DigiKey, Mouser or Farnell API key |
 | `search <mpn or value> [--basic]` | Look a part up, or find JLCPCB parts by value (`"1k 0603 1%"`) |
-| `add <mpn>` | Add a part from search, with supplier numbers and specs |
+| `add <mpn>` | Add a part from search, with supplier numbers and specs (the window does this when the CAD download arrives) |
 | `cad <mpn> [--next]` | Open your preferred CAD provider (or the next one) for a part |
 | `import <file>` | Import a CAD zip or .IntLib (To check) |
 | `reimport <name>` | Import a zip again from the Archive folder |

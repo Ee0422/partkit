@@ -93,13 +93,16 @@ def test_find_parts_add_and_get_cad(win, monkeypatch, tmp_path):
     win.search_box.setText("RC0603FR-071KL")
     win.show_results(SearchResult(mpn="RC0603FR-071KL", offers=[offer]))
     assert win.results.rowCount() == 1
-    win.add_result()
-    p = win.lib.get("RC0603FR-071KL")
-    assert p.category == "Resistors" and p.params["Supplier Part Number 1"] == "603-RC0603FR-071KL"
     win.lib.settings.providers = ["SnapMagic", "SamacSys"]
     win.get_cad(next_=False)
     win.get_cad(next_=True)
     assert opened == ["SnapMagic", "SamacSys"] and not win.next_btn.isEnabled()
+    # nothing is added until the download arrives; the supplier part waits for it
+    from partkit import waiting
+
+    assert win.lib.get("RC0603FR-071KL") is None
+    entry = waiting.current(win.lib)
+    assert entry["mpn"] == "RC0603FR-071KL" and waiting.offers_of(entry)[0].supplier_pn == "603-RC0603FR-071KL"
 
 
 def test_search_messages_without_keys(win):
@@ -118,8 +121,10 @@ def test_get_cad_works_without_any_supplier_keys(win, monkeypatch):
     win.search_box.setText("LM358DR")
     win.add_cat.setCurrentText("ICs")
     win.get_cad(next_=False)
-    p = win.lib.get("LM358DR")
-    assert p and p.category == "ICs" and p.target_schlib == "Libraries/ICs.SchLib"
+    from partkit import waiting
+
+    entry = waiting.current(win.lib)
+    assert entry["mpn"] == "LM358DR" and entry["category"] == "ICs" and win.lib.get("LM358DR") is None
     assert "LM358DR" in opened[0]
 
 
@@ -130,7 +135,7 @@ def test_key_fields_only_for_suppliers_in_the_list(win):
     assert form.isRowVisible(win.key_rows["Mouser"]) and not form.isRowVisible(win.key_rows["DigiKey"])
 
 
-def test_value_results_one_row_per_part_with_filters(win):
+def test_value_results_one_row_per_part_with_filters(win, monkeypatch):
     from partkit.search import SearchResult
     from partkit.suppliers import Offer
     from partkit.valuesearch import parse
@@ -155,9 +160,14 @@ def test_value_results_one_row_per_part_with_filters(win):
     assert win.results.rowCount() == 1 and win.results.item(0, 0).text() == "EXT1K"
     win.narrow.setText("")
     win.results.selectRow(1)
-    win.add_result()
-    p = win.lib.get(win.results.item(1, 0).text())
-    assert p and p.params["Supplier 2"] == "LCSC"
+    monkeypatch.setattr(win, "toggle_watch", lambda on: None)
+    from partkit import providers, waiting
+
+    monkeypatch.setattr(providers, "open_source", lambda src, opener=None: None)
+    win.get_cad(next_=False)
+    entry = waiting.current(win.lib)
+    assert entry["mpn"] == win.results.item(1, 0).text()
+    assert [o.supplier for o in waiting.offers_of(entry)] == ["JLCPCB", "LCSC"]
 
 
 def test_i_buy_from_setting(win):
@@ -351,3 +361,24 @@ def test_value_filters_fit_the_part_and_remember_my_usual(win, monkeypatch):
     win.search_box.setText("LM358DR")
     win.run_search()
     assert win.value_filter_box.isHidden()
+
+
+def test_no_cad_files_uses_one_of_my_footprints(win, monkeypatch):
+    from PySide6.QtWidgets import QInputDialog
+
+    from partkit.search import SearchResult
+    from test_reuse_kits import J47, checked_10k
+
+    checked_10k(win.lib)
+    win.show_results(SearchResult(mpn="x", offers=[J47]))
+    win.results.selectRow(0)
+    monkeypatch.setattr(QInputDialog, "getItem", staticmethod(lambda *a, **k: (a[3][0], True)))
+    made = []
+
+    def fake_exec(d):
+        made.append((d.src.mpn, d.text.text(), d.table.rowCount(), d._chosen() if hasattr(d, "_chosen") else None))
+        return gui.QDialog.Rejected
+
+    monkeypatch.setattr(gui.ReuseDialog, "exec", fake_exec)
+    win.use_my_footprint()
+    assert made and made[0][1] == J47.mpn and made[0][2] == 1

@@ -68,6 +68,7 @@ class Bridge(QObject):
     """Carries messages from background threads (Downloads watcher, searches) to the window."""
     message = Signal(str)
     searched = Signal(object)
+    download = Signal(str)  # a finished CAD download, imported on the window's thread
 
 
 # ---------------------------------------------------------------- first-run setup
@@ -113,8 +114,8 @@ class SetupDialog(QDialog):
 
 FIRST_STEPS = (
     "Your library is ready. Three steps to your first part:\n\n"
-    "1. Find parts: search a part number, or a value like 1k 0603 1%. Pick one, click Add to library, "
-    "then Get CAD files and download it (PartKit imports it by itself).\n\n"
+    "1. Find parts: search a part number, or a value like 1k 0603 1%. Pick one and click Get CAD files. "
+    "Download the Altium files there: the part appears in My parts by itself.\n\n"
     "2. My parts: check the symbol and footprint, then click Mark Ready.\n\n"
     "3. Click Send to Altium (top right). PartKit writes the part into your Altium libraries, "
     "also while Altium is open.\n\n"
@@ -126,7 +127,7 @@ FIRST_STEPS = (
 class ReuseDialog(QDialog):
     """New value from a checked part, or a new part on its footprint."""
 
-    def __init__(self, parent, lib: Library, src, mode: str):
+    def __init__(self, parent, lib: Library, src, mode: str, preset=None):
         from .reuse import can_search_by_value
 
         super().__init__(parent)
@@ -195,6 +196,11 @@ class ReuseDialog(QDialog):
         buttons.rejected.connect(self.reject)
         lay.addWidget(buttons)
         self.resize(900, 500)
+        if preset is not None:  # the supplier part picked on Find parts
+            self.text.setText(preset.mpn)
+            self.rows = [preset]
+            self.show_rows()
+            self.table.selectRow(0)
 
     def query(self) -> str:
         from .reuse import value_query_text
@@ -472,6 +478,7 @@ class MainWindow(QMainWindow):
         self.bridge = Bridge()
         self.bridge.message.connect(self.log)
         self.bridge.searched.connect(self.show_results)
+        self.bridge.download.connect(self.handle_download)
         self.observer = None
         self.offers = []
         self.cad_list = []
@@ -551,7 +558,8 @@ class MainWindow(QMainWindow):
         lay.addLayout(row)
         self.search_msg = QLabel(FIRST_STEPS.split("\n\n", 1)[1].rsplit("\n\n", 1)[0]
                                  if not self.lib.parts() else
-                                 "Type a part number, or a resistor or capacitor value to see JLCPCB parts.")
+                                 "Type a part number, or a resistor or capacitor value (100nF, 10k). Or just "
+                                 "'capacitor 0805' to list them: filters for size, voltage and so on appear.")
         self.search_msg.setWordWrap(True)
         lay.addWidget(self.search_msg)
         filters = QHBoxLayout()
@@ -580,18 +588,19 @@ class MainWindow(QMainWindow):
         row = QHBoxLayout()
         self.add_cat = QComboBox()
         self.add_cat.addItems(["Let PartKit guess"] + list(F.CATEGORIES))
-        add = QPushButton("Add to library")
-        add.setToolTip("Fills Manufacturer, Description, Datasheet, supplier numbers and specs")
-        add.clicked.connect(self.add_result)
         cad = QPushButton("Get CAD files")
-        cad.setToolTip("Opens your first preferred provider; your download is imported automatically")
+        cad.setToolTip("Opens your first CAD provider. Download the Altium files there: the part appears in "
+                       "My parts with its symbol, footprint, 3D model and these supplier details.")
         cad.clicked.connect(self.get_cad_first)
         self.next_btn = QPushButton("Not there? Try next provider")
         self.next_btn.clicked.connect(self.get_cad_next)
         self.next_btn.setEnabled(False)
+        own = QPushButton("No CAD files? Use one of my footprints…")
+        own.setToolTip("Make this part on a footprint you've already checked (New part from this footprint)")
+        own.clicked.connect(self.use_my_footprint)
         page = QPushButton("Open supplier page")
         page.clicked.connect(self.open_supplier_page)
-        for b in (QLabel("Category:"), self.add_cat, add, cad, self.next_btn, page):
+        for b in (QLabel("Category:"), self.add_cat, cad, self.next_btn, own, page):
             row.addWidget(b)
         row.addStretch()
         lay.addLayout(row)
@@ -814,22 +823,6 @@ class MainWindow(QMainWindow):
 
         return "" if parse(text) else text
 
-    def add_result(self):
-        from .search import add_from_search, offers_for
-
-        r = self._selected_row()
-        if r is None and getattr(self, "last_search", None) is not None and self.last_search.query is None:
-            r = (getattr(self, "visible", []) or [None])[0]
-        mpn = r.mpn if r else self._search_mpn()
-        if not mpn:
-            QMessageBox.information(self, "PartKit", "Pick a part in the results first.")
-            return
-        # without supplier results the part is added with just its MPN; the CAD file fills in the rest
-        offers = offers_for(r, self.lib.settings.suppliers) if r else []
-        cat = self.add_cat.currentText()
-        part = add_from_search(self.lib, mpn, offers, category=None if cat.startswith("Let") else cat)
-        self.log(f"{part.mpn} added to My parts (To check) as {part.category}. Click 'Get CAD files' next.")
-
     # bound methods, not lambdas: a lambda holding the window keeps it alive past Qt's shutdown
     def get_cad_first(self):
         self.get_cad(next_=False)
@@ -856,14 +849,51 @@ class MainWindow(QMainWindow):
             self.next_btn.setEnabled(False)
             return
         src = self.cad_list[self.cad_index]
-        if not self.lib.get(mpn):
-            self.add_result()
+        if not next_:
+            from . import waiting
+            from .search import offers_for
+
+            r = self._selected_row()
+            if r is None and getattr(self, "last_search", None) is not None and self.last_search.query is None:
+                r = next((x for x in getattr(self, "visible", []) if x.mpn == mpn), None)
+            cat = self.add_cat.currentText()
+            waiting.remember(self.lib, mpn, offers_for(r, self.lib.settings.suppliers) if r else [],
+                             "" if cat.startswith("Let") else cat)
         if hasattr(self, "watch_box") and not self.watch_box.isChecked():
             self.watch_box.setChecked(True)  # so the download imports by itself
         open_source(src)
         self.next_btn.setEnabled(self.cad_index + 1 < len(self.cad_list))
         self.log(f"Opened {src.name}{' (hunting)' if src.hunting else ''} for {mpn}. Download the Altium "
-                 "files there; PartKit imports them from your Downloads folder.")
+                 "files there: the part appears in My parts when the download arrives. Not there? "
+                 "Try next provider.")
+
+    def use_my_footprint(self):
+        """No provider has CAD files: make the part on a footprint you've already checked."""
+        from PySide6.QtWidgets import QInputDialog
+
+        from . import fields as Fl
+
+        r = self._selected_row()
+        if r is None:
+            QMessageBox.information(self, "PartKit", "Pick a part in the results first.")
+            return
+        ready = [p for p in self.lib.parts() if p.stage == Fl.READY and p.footprint and p.source != "PartKit"]
+        if not ready:
+            QMessageBox.information(self, "PartKit", "You don't have a checked (Ready) part with a footprint yet.")
+            return
+        size = r.specs.get("Size", "")
+        ready.sort(key=lambda p: (size not in (p.params.get("Size", "") + p.footprint), p.footprint))
+        labels = [f"{p.footprint}  (from {p.mpn}{', ' + p.params.get('Size') if p.params.get('Size') else ''})"
+                  for p in ready]
+        label, ok = QInputDialog.getItem(self, "PartKit", f"Which of your checked footprints fits {r.mpn}"
+                                         + (f" ({size})" if size else "") + "?", labels, 0, False)
+        if not ok:
+            return
+        src = ready[labels.index(label)]
+        d = ReuseDialog(self, self.lib, src, "footprint", preset=r)
+        if d.exec() == QDialog.Accepted and d.created:
+            self.log(f"{d.created.mpn} added to My parts on the footprint of {src.mpn}, To check. Mark it Ready, "
+                     "then Send to Altium.")
 
     def open_supplier_page(self):
         import webbrowser
@@ -1497,11 +1527,25 @@ class MainWindow(QMainWindow):
                     return
                 res = attach_step(self.lib, mpns[0], path)
             else:
-                res = import_zip(self.lib, path)
+                from .watcher import import_download
+
+                res = import_download(self.lib, path, confirm=self.confirm_same_part)
             for m in res.messages:
                 self.log(m)
         except ImportProblem as e:
             self.log(f"{path.name}: {e}")
+
+    def handle_download(self, path: str):
+        from .watcher import handle_file
+
+        handle_file(self.lib, Path(path), self.log, confirm=self.confirm_same_part)
+        self.refresh_library()
+
+    def confirm_same_part(self, in_file: str, expected: str) -> bool:
+        return QMessageBox.question(
+            self, "PartKit", f"This download says {in_file}.\n\nIs it the {expected} you clicked Get CAD files "
+            f"for?\n\nYes: it becomes {expected}, with the supplier details from your search.\n"
+            f"No: it's added on its own as {in_file}.") == QMessageBox.Yes
 
     def choose_zip(self):
         files, _ = QFileDialog.getOpenFileNames(self, "Choose CAD downloads", str(Path.home() / "Downloads"),
@@ -1519,7 +1563,7 @@ class MainWindow(QMainWindow):
         if on:
             from watchdog.observers import Observer
             from watchdog.events import FileSystemEventHandler
-            from .watcher import handle_file, wait_until_complete
+            from .watcher import wait_until_complete
 
             win = self
 
@@ -1527,7 +1571,7 @@ class MainWindow(QMainWindow):
                 def _go(self, p):
                     path = Path(p)
                     if path.suffix.lower() in DOWNLOAD_EXT and wait_until_complete(path):
-                        handle_file(win.lib, path, win.bridge.message.emit)
+                        win.bridge.download.emit(str(path))  # import on the window's thread, so it can ask
 
                 def on_created(self, e):
                     if not e.is_directory:

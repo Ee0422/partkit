@@ -13,6 +13,7 @@ import tempfile
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
+from typing import Callable
 
 from . import fields as F
 from .altium_files import PcbLibInfo, SchLibInfo, embedded_models, extract_intlib_file, pcblib_info, schlib_info
@@ -175,7 +176,13 @@ def _vendor_params(info: SchLibInfo | None, symbol: str) -> dict[str, str]:
 
 
 def import_zip(lib: Library, zip_path: Path, mpn: str | None = None, category: str | None = None,
-               archive: bool = True) -> ImportResult:
+               archive: bool = True, expected: str = "",
+               confirm: Callable[[str, str], bool] | None = None) -> ImportResult:
+    """Import a CAD download into To check.
+
+    expected: the part you clicked Get CAD files for. The download becomes that part when
+    the number inside it matches, or when confirm(number_in_file, expected) says yes.
+    """
     zip_path = Path(zip_path)
     messages: list[str] = []
     with tempfile.TemporaryDirectory(prefix="partkit-") as tmp:
@@ -246,8 +253,14 @@ def import_zip(lib: Library, zip_path: Path, mpn: str | None = None, category: s
             if "snapeda" in keys or "snapmagic" in keys:
                 provider = "SnapMagic"
         params = _vendor_params(s_info, symbol)
-        mpn = (mpn or params.get("Manufacturer Part Number") or guess_mpn_from_name(zip_path.name)
-               or symbol or zip_path.stem).strip()
+        in_file = (params.get("Manufacturer Part Number") or guess_mpn_from_name(zip_path.name)
+                   or symbol or zip_path.stem).strip()
+        if not mpn and expected:
+            from .waiting import same_number
+
+            if same_number(in_file, expected) or (confirm is not None and confirm(in_file, expected)):
+                mpn = expected
+        mpn = (mpn or in_file).strip()
         params["Manufacturer Part Number"] = mpn
 
         existing = lib.get(mpn)

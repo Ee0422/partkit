@@ -28,7 +28,8 @@ def wait_until_complete(path: Path, settle_s: float = 1.5, timeout_s: float = 12
     return False
 
 
-def handle_file(lib: Library, path: Path, report: Callable[[str], None]) -> None:
+def handle_file(lib: Library, path: Path, report: Callable[[str], None],
+                confirm: Callable[[str, str], bool] | None = None) -> None:
     path = Path(path)
     if path.name.lower().endswith(PARTIAL_SUFFIXES) or not looks_like_cad_download(path):
         return
@@ -41,10 +42,43 @@ def handle_file(lib: Library, path: Path, report: Callable[[str], None]) -> None
             else:
                 report(f"{path.name}: a 3D model with no matching part; drop it on a part to attach it.")
             return
-        for m in import_zip(lib, path).messages:
+        for m in import_download(lib, path, confirm).messages:
             report(m)
     except ImportProblem as e:
         report(f"{path.name}: {e}")
+
+
+def import_download(lib: Library, path: Path, confirm: Callable[[str, str], bool] | None = None):
+    """Import a CAD download and join it to the part you clicked Get CAD files for.
+
+    If the number in the file differs from that part's, confirm(in_file, expected) decides;
+    without confirm (command line) they're kept apart, to be safe.
+    """
+    from . import waiting
+    from .search import apply_offers
+    from . import fields as F
+
+    entry = waiting.current(lib)
+    res = import_zip(lib, path, expected=entry["mpn"] if entry else "", confirm=confirm,
+                     category=(entry or {}).get("category") or None)
+    if not entry:
+        return res
+    if res.part.mpn != entry["mpn"]:
+        res.messages.append(f"This download is {res.part.mpn}, not {entry['mpn']} that you clicked Get CAD files "
+                            f"for, so it was added on its own. PartKit is still waiting for {entry['mpn']}.")
+        return res
+    part = lib.get(res.part.mpn)
+    before = part.category
+    apply_offers(part, waiting.offers_of(entry))
+    if part.category != before or before == F.DEFAULT_CATEGORY:
+        part.target_schlib, part.target_pcblib = lib.settings.target_libs(part.category)
+    lib.save(part)
+    waiting.clear(lib)
+    sp = part.params.get("Supplier Part Number 1", "")
+    res.messages.append(f"{part.mpn}: supplier details from your search added"
+                        + (f" ({part.params.get('Supplier 1', '')} {sp})" if sp else "") + f", category {part.category}.")
+    res.part = part
+    return res
 
 
 def watch(lib: Library, folder: Path, report: Callable[[str], None] = print) -> None:
